@@ -1,0 +1,15 @@
+[package]
+name = "theme-manager"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "theme-set"
+path = "src/bin/theme_set.rs"
+
+[[bin]]
+name = "theme-daemon"
+path = "src/bin/theme_daemon.rs"
+
+[dependencies]
+inotify = "0.10"
