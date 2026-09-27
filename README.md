@@ -2,13 +2,13 @@
 
 A minimal Rust-based theming system for Hyprland. A single theme file drives
 config generation for Ghostty, Hyprland, swaync, vicinae, GTK, Qt, and Neovim,
-with wallpaper management via `awww`.
+with wallpaper selection published to `~/.local/state/theme/active.json` for Quickshell to render.
 
 ## How it works
 
 Two binaries:
 
-- **`theme-set <name>`** — activates a theme. Writes the fish env file
+- **`theme-set <name>`** — activates a theme. Writes every shell env file
   immediately (so your shell picks it up) and writes the theme name to a state
   file that the daemon watches.
 - **`theme-daemon`** — started once by Hyprland on login. Watches the state
@@ -22,10 +22,12 @@ cp target/release/theme-set ~/.local/bin/
 cp target/release/theme-daemon ~/.local/bin/
 ```
 
-Add to `hyprland.conf`:
+Add to `hyprland.lua`:
 
-```
-exec-once = theme-daemon
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("theme-daemon")
+end)
 ```
 
 Add to `~/.config/fish/config.fish` (replace any old `theme` alias):
@@ -42,16 +44,43 @@ if test -f ~/.config/fish/conf.d/theme_vars.fish
 end
 ```
 
+For bash/zsh/sh, source the POSIX file instead (e.g. in `~/.bashrc`):
+
+```sh
+theme() {
+    command theme-set "$1" && . "$HOME/.config/theme-manager/theme_env.sh"
+}
+
+[ -f "$HOME/.config/theme-manager/theme_env.sh" ] && . "$HOME/.config/theme-manager/theme_env.sh"
+```
+
+For Hyprland-launched apps, add to `~/.config/hypr/hyprland.lua`
+(after `require("colors")`):
+
+```lua
+require("theme_env")
+```
+
+No setup is needed for systemd user services, portals, or D-Bus-activated
+apps: `~/.config/environment.d/theme-manager.conf` is loaded automatically
+at login, and every switch is pushed live into the running session (see
+"Global environment variables" below). Rebuild, reinstall, and restart the
+daemon after updating sources so it learns the new writers.
+
 ## Theme file format
 
-Theme files live in `~/dots/themes/`. One file per theme, named without an
+Theme files live in `~/.config/theme-manager/themes/`. One file per theme, named without an
 extension (e.g. `tokio_paper`, `everblush`).
 
 ```sh
 # Required
 VARIANT=dark          # must be 'dark' or 'light'
 
-# Wallpaper (optional — omit or set to 'none' to show Hyprland background)
+# Optional color mode. When dynamic, only VARIANT and WALLPAPER are required;
+# all omitted palette colors are extracted from the wallpaper.
+MODE=dynamic
+
+# Wallpaper (required by MODE=dynamic; otherwise optional)
 WALLPAPER=/home/you/walls/my_wallpaper.png
 
 # Base16 colors
@@ -69,6 +98,14 @@ BASE0C=#73daca
 BASE0D=#7aa2f7
 BASE0E=#bb9af7
 BASE0F=#f7768e
+
+# Optional transparent surface default; controls and text retain palette colors
+TRANSPARENT=false
+
+# Shared Hyprland geometry (optional defaults shown)
+CORNER_RADIUS=20
+BORDER_SIZE=0
+BORDER_COLOR=#2f3549
 
 # Extended palette (required by swaync, vicinae, hyprland)
 BLACK=#1a1b26
@@ -91,8 +128,33 @@ PURPLE=#bb9af7
 BASE03=#444b6a
 ```
 
-All keys are available in your fish shell as `$THEME_<KEY>` (e.g.
-`$THEME_BASE00`, `$THEME_VARIANT`) after switching themes.
+All keys are available everywhere as `$THEME_<KEY>` (e.g.
+`$THEME_BASE00`, `$THEME_VARIANT`): fish reads `theme_vars.fish`, other
+shells source `theme_env.sh`, and GUI apps inherit them via
+`environment.d`/Hyprland (see "Global environment variables").
+
+### Dynamic colors
+
+Set `MODE=dynamic` to generate the full Base16 and extended palette directly
+from `WALLPAPER`. In this mode a theme can be as small as:
+
+```sh
+VARIANT=dark
+MODE=dynamic
+WALLPAPER=/home/you/walls/city.webm
+```
+
+Use `WALLPAPER=current` for a reusable Matugen-style palette that extracts
+colors from the wallpaper active immediately before the theme switch. The
+resolved absolute path is then carried through to the generated environment
+and wallpaper writer.
+
+FFmpeg decodes a representative frame from JPEG, PNG, GIF, animated WebP, or a
+supported video. The manager analyzes its dominant colors and creates variant-
+appropriate backgrounds, foregrounds, and semantic accents for every existing
+writer. Individual color keys may still be specified to override generated
+values. Dynamic mode requires a valid wallpaper and FFmpeg; an extraction error
+stops the switch instead of applying a partially generated theme.
 
 ## Usage
 
@@ -106,59 +168,204 @@ The `theme` function updates configs, reloads running apps, and exports all
 `THEME_*` vars into your current shell immediately. New terminals pick them up
 automatically.
 
+## AMOLED mode
+
+AMOLED is a persistent manager-wide override, not a separate palette file. It
+is applied after static or dynamic theme resolution and before every writer,
+so switching themes keeps true-black backgrounds across Ghostty, Hyprland,
+swaync, Vicinae, Neovim, Zathura, and the generated Fish environment.
+
+```fish
+theme-set --amoled on
+theme-set --amoled off
+theme-set --amoled toggle
+theme-set --amoled status
+```
+
+The mode is stored in `~/.local/state/theme/amoled`. Enabling it changes the
+effective variant to dark, uses `#000000` for the main background, builds
+sub-surfaces from `#040404` through `#181818`, and installs readable light
+foregrounds. Theme-specific accent colors are preserved, including when the
+source theme is light or dynamically generated. Changing this option causes
+the daemon to reapply the current theme and publish updated API snapshot.
+
+## Transparent backgrounds
+
+`TRANSPARENT=true` in a theme sets its default. Validate values strictly: only
+`true` or `false` accepted. Its persistent override wins over theme defaults
+until reset with `theme-set --transparent auto`:
+
+```sh
+theme-set --transparent on
+theme-set --transparent off
+theme-set --transparent auto
+theme-set --transparent status
+theme-set --transparent toggle
+```
+
+Override lives in `~/.local/state/theme/transparent` (`auto`, `true`, or
+`false`). Daemon watches AMOLED state and regenerates targets. Consumers can
+watch API snapshot for resolved opacity after theme apply. Directly toggling
+Transparent in shell requires installed, running theme-manager binaries.
+
+Supported surfaces: Ghostty main background (`background-opacity=0.02`), swaync
+notification/control-center backgrounds (`rgba`), and Vicinae main/secondary
+backgrounds (`#AARRGGBB`). Opaque mode restores original backgrounds. Foregrounds,
+selection colors, and button accents remain colored. Hyprland provides blur
+where configured; actual sampled blur depends on compositor rules and window
+namespace. Existing GTK/Qt application themes, Zathura, Neovim, and arbitrary
+third-party apps have no general window-opacity option in this manager; their
+palettes stay intact. Restart apps that do not reload their appearance live.
+
 ## What gets generated
 
 | Target | Output file | Reload |
 |---|---|---|
-| Fish env | `~/.config/fish/conf.d/theme_vars.fish` | sourced by shell function |
-| Ghostty | `~/dots/ghostty/themes/active` | manual (Ghostty reloads on file change) |
-| Hyprland | `~/dots/hypr/colors.conf` | auto (Hyprland watches the file) |
-| Vicinae | `~/dots/vicinae-themes/<name>.toml` | `vicinae theme set <name>` |
-| swaync | `~/dots/swaync/style.css` | `swaync-client -rs` |
-| Neovim patch | `/tmp/nvim_theme_patch.lua` | `v:lua.reload_nvchad_theme()` via socket |
-| GTK 3 | `~/.config/gtk-3.0/settings.ini` | `gsettings` |
-| GTK 4 | `~/.config/gtk-4.0/settings.ini` | via GTK 3 gsettings call |
-| Qt6ct | `~/.config/qt6ct/qt6ct.conf` | requires Qt app restart |
-| Wallpaper | — | `awww img <path>` or kills `awww-daemon` |
+| Fish env | `~/.config/fish/conf.d/theme_vars.fish` | auto-sourced from `conf.d` |
+| POSIX env | `~/.config/theme-manager/theme_env.sh` | source from `~/.bashrc`/`~/.zshrc` (snippet in header) |
+| systemd env | `~/.config/environment.d/theme-manager.conf` | auto-loaded at login + pushed live on every switch |
+| Hyprland env | `~/.config/hypr/theme_env.lua` | `require("theme_env")` in `hyprland.lua`, live via `hyprctl setenv` |
+| Ghostty | `~/.config/ghostty/themes/active` | `config-file = ~/.config/ghostty/themes/active` |
+| Hyprland | `~/.config/hypr/colors.lua` | `require("colors")` in `hyprland.lua`, then `hyprctl reload config-only` |
+| Kitty | `~/.config/kitty/themes/active.conf` | `include themes/active.conf` in `kitty.conf` |
+| Vicinae | `~/.config/vicinae/themes/<name>.toml` | `vicinae theme set <name>` |
+| swaync | `~/.config/swaync/theme-vars.css` | `@import url("theme-vars.css");` at top of your `style.css`, then `swaync-client -rs` |
+| Zathura | `~/.config/zathura/themes/active` | `include <path>` in `zathurarc` (exact line in file header) |
+| Neovim patch | `/tmp/nvim_theme_patch.lua` | `dofile("/tmp/nvim_theme_patch.lua")` in nvim config |
+| GTK 3 | `~/.config/gtk-3.0/theme-manager.ini` | snippet: merge `[Settings]` into `settings.ini` once (header says how) |
+| GTK 4 | `~/.config/gtk-4.0/theme-manager.ini` | snippet: merge `[Settings]` into `settings.ini` once (header says how) |
+| GTK 3/4 CSS | `~/.local/share/themes/ThemeManager/gtk-3.0/gtk.css` and `gtk-4.0/gtk.css` | selected by `GTK_THEME=ThemeManager` or GNOME `gtk-theme`; restart apps |
+| App-neutral API | `~/.local/state/theme/active.json` | atomic update; watch parent directory for `MOVED_TO` |
+| Qt6ct | `~/.config/qt6ct/theme-manager.conf` | snippet: copy `color_scheme_path` into `qt6ct.conf` once (header says how) |
+| Wallpaper | `~/.local/state/theme/active.json` | Quickshell watches `values.WALLPAPER` |
 | Neovim base46 | cache | `nvim --headless` recompile |
+
+Writers for Ghostty, Hyprland, Kitty, Vicinae, swaync, and Zathura are
+conditional: each one runs only when its binary is on `PATH` or its config
+directory already exists under `$HOME`. Uninstalled apps are skipped so theme
+switches don't create config bloat.
+
+### Global environment variables
+
+Every switch publishes the same set — `THEME_NAME`, `THEME_PATH`,
+`GTK_THEME`, `QT_QPA_PLATFORMTHEME`, plus `THEME_<KEY>` for each resolved
+theme key — through four layers:
+
+1. **Fish** (`theme_vars.fish`) — auto-sourced from `conf.d`.
+2. **POSIX shells** (`theme-manager/theme_env.sh`) — `export` lines sourced
+   by bash/zsh/sh rc files.
+3. **systemd/D-Bus** (`environment.d/theme-manager.conf`) — read by the
+   systemd user manager at login, so portals, Electron apps, and user
+   services inherit the palette.
+4. **Hyprland** (`hypr/theme_env.lua`) — `hl.env(...)` calls for apps
+   launched from the compositor (conditional: only written when Hyprland
+   is installed).
+
+Layers 3 and 4 are also pushed **live** on every apply, so no relogin is
+needed: `systemctl --user set-environment`, `dbus-update-activation-environment
+--systemd`, and one `hyprctl setenv` per variable. All three are
+best-effort — a missing helper on a headless host only logs.
+
+### Ghostty
+
+After writing the active theme, the daemon asks Ghostty to reload its config.
+It first uses Ghostty's supported systemd user service:
+
+```bash
+systemctl reload --user app-com.mitchellh.ghostty.service
+```
+
+If Ghostty was launched directly instead of through systemd/D-Bus, the manager
+falls back to sending its documented config-reload signal (`SIGUSR2`) to an
+exactly named `ghostty` process. Both methods are best-effort, so switching a
+theme still succeeds when Ghostty is not installed or not running.
 
 ### swaync
 
-swaync's style is split into two files:
+The manager owns only the variables file and never touches your stylesheet:
 
-- `~/dots/swaync/styles_rules.css` — your hand-written rules (not touched)
-- `~/dots/swaync/style.css` — generated: CSS variables prepended to your rules
+- `~/.config/swaync/theme-vars.css` — generated variables (overwritten each switch)
+- `~/.config/swaync/style.css` — yours, never touched
 
-Only edit `styles_rules.css`. `style.css` is overwritten on every theme change.
+One-time setup: put this line at the very top of your `style.css`, then write
+your own rules below it:
 
-### GTK dark/light
+```css
+@import url("theme-vars.css");
+```
 
-`VARIANT=dark` sets `gtk-application-prefer-dark-theme = 1` and calls
-`gsettings set org.gnome.desktop.interface color-scheme prefer-dark`.  
-`VARIANT=light` does the reverse. Running GTK apps update immediately.
+Reload with `swaync-client -rs` (done automatically when swaync is running).
+
+### GTK and system dark/light
+
+`VARIANT=dark` sets `gtk-application-prefer-dark-theme = 1`, the GNOME
+`color-scheme` to `prefer-dark`, and the GTK theme to `ThemeManager`.
+`VARIANT=light` sets corresponding light values and also selects `ThemeManager`. The D-Bus/systemd
+activation environment also receives `THEME_VARIANT`, `GTK_THEME`, and
+`QT_QPA_PLATFORMTHEME`, so newly launched portal, GTK, Electron, and Qt apps
+inherit the selected variant. Running apps that watch the XDG settings portal
+update immediately. GTK 3/4 theme CSS is regenerated from Base16 colors on
+switch: window surfaces, headerbars, buttons, entries, switches, checks, tabs,
+lists, menus, scrollbars, focus/selection, and disabled states. Theme files live
+under `~/.local/share/themes/ThemeManager/`; apps generally need a restart to
+pick up CSS changes. Libadwaita apps may ignore custom GTK CSS themes.
+For file-based setups without a portal, merge the
+`theme-manager.ini` snippet (written next to each `settings.ini`, header
+explains how) into your own `settings.ini` once — the manager never edits
+your `settings.ini` itself.
+
+### App-neutral theme API
+
+After each apply, `theme-daemon` atomically replaces
+`~/.local/state/theme/active.json` (schema version `1`). Any client can read
+it at startup and watch `~/.local/state/theme/` for `MOVED_TO` on
+`active.json`, then reopen it. No shell-specific IPC or polling required.
+
+```json
+{"version":1,"name":"example","variant":"dark","amoled":false,"opacity":1,"colors":{"BASE00":"#1a1b26"},"values":{"BASE00":"#1a1b26","VARIANT":"dark"}}
+```
+
+`colors` contains resolved `#RRGGBB` palette entries; `values` contains all
+resolved theme keys (including geometry and wallpaper). Unknown keys may be
+ignored. `opacity` uses the resolved `TRANSPARENT` value (`1` means opaque).
+`theme-set --amoled ...` changes state; daemon publishes refreshed snapshot.
+Theme selection still uses `theme-set <name>` and `~/.local/state/theme/current`.
+GTK's `ThemeManager` theme name is unrelated to any shell framework. Existing
+old GTK theme directories are left alone; remove them manually if unwanted.
 
 ### Qt dark/light
 
-`VARIANT=dark` sets `color_scheme_path` to `darker.conf`.  
-`VARIANT=light` sets it to `airy.conf`.  
-All other lines in `qt6ct.conf` are left untouched. Qt apps need a restart.
+`VARIANT=dark` writes `color_scheme_path=.../darker.conf` into the
+`theme-manager.conf` snippet, `light` writes `airy.conf`. Copy that line into
+the `[Appearance]` section of your own `~/.config/qt6ct/qt6ct.conf` once (the
+snippet header shows exactly how). Your `qt6ct.conf` is never touched by the
+manager. Qt apps need a restart.
 
 ### Wallpaper
 
-If `WALLPAPER` is unset, empty, `none`, or points to a file that doesn't
-exist, `awww-daemon` is killed and Hyprland's `background_color` (from
-`colors.conf`) shows instead.
-
-If the file exists and `awww-daemon` is already running, `awww img <path>` is
-called. If the daemon isn't running it is started first, then the wallpaper is
-set after a short delay.
+The manager resolves `WALLPAPER` from the selected theme and atomically writes
+`~/.local/state/theme/active.json`. Quickshell watches this snapshot and draws
+still images as a fullscreen, noninteractive background layer per monitor.
+Missing, `none`, and video wallpaper values use Quickshell's solid background.
+No wallpaper daemon is started by theme-manager. Rebuild and replace installed
+`theme-daemon` binary after updating source; restart old daemon process once.
+Video themes still resolve for
+palette extraction, but video wallpaper playback is not implemented in Quickshell.
 
 ## Adding a new config target
+
+Writer contract: a writer NEVER reads, patches, or overwrites the user's own
+config files. It owns exactly one generated file, written wholesale on every
+switch. The user imports that file from their own config. Every generated
+file starts with a header comment: "Generated by theme-manager" plus a
+"To use:" tutorial with the exact import line. Formats without an import
+mechanism (GTK `settings.ini`, `qt6ct.conf`) get a merge-snippet whose header
+explains the one-time manual copy.
 
 1. Create `src/writers/my_app.rs`:
 
 ```rust
-use crate::{Theme, ThemeError, Writer, dots};
+use crate::{home, Theme, ThemeError, Writer};
 use std::path::PathBuf;
 
 pub struct MyApp;
@@ -167,7 +374,27 @@ impl Writer for MyApp {
     fn name(&self) -> &'static str { "my-app" }
 
     fn output_path(&self) -> PathBuf {
-        dots().join("my-app/config")
+        // Manager-owned file next to the user config — never the user
+        // config itself.
+        home().join(".config/my-app/theme-manager.conf")
+    }
+
+    // Skip output when the app isn't installed, so theme switches
+    // don't create config bloat.
+    fn enabled(&self) -> bool {
+        crate::app_enabled("my-app", ".config/my-app")
+    }
+
+    fn generate(&self, theme: &Theme) -> Result<String, ThemeError> {
+        let bg = theme.require("BASE00")?;
+        let fg = theme.require("BASE05")?;
+        Ok(format!(
+            "# Generated by theme-manager. Do not edit manually.\n\
+             # To use: add this line to ~/.config/my-app/config:\n\
+             #   include ~/.config/my-app/theme-manager.conf\n\
+             #\n\
+             background = {bg}\nforeground = {fg}\n"
+        ))
     }
 
     fn generate(&self, theme: &Theme) -> Result<String, ThemeError> {
@@ -207,8 +434,9 @@ theme.require("KEY")          // &str or MissingKey error
 theme.require_rgb("KEY")      // (u8, u8, u8) parsed from hex, or error
 hex_to_rgb("#rrggbb")         // (u8, u8, u8)
 rgb_str((r, g, b))            // "r, g, b" — for CSS rgba()
-dots()                        // PathBuf to ~/dots
 home()                        // PathBuf to $HOME
+binary_exists("ghostty")      // true when a binary is on PATH
+app_enabled("ghostty", ".config/ghostty") // binary OR config dir exists
 ```
 
 If your writer needs `Theme` inside `reload()` (the trait doesn't pass it),
@@ -220,5 +448,10 @@ skip `reload()` and instead write a free function called directly from
 | Path | Contents |
 |---|---|
 | `~/.local/state/theme/current` | Active theme name, watched by daemon |
+| `~/.local/state/theme/amoled` | Persistent manager-wide AMOLED override (`true` or `false`) |
+| `~/.local/state/theme/transparent` | Persistent transparent override (`auto`, `true`, or `false`) |
 | `~/.config/fish/conf.d/theme_vars.fish` | Generated `set -gx` lines, auto-sourced by fish |
+| `~/.config/theme-manager/theme_env.sh` | Generated POSIX `export` lines for bash/zsh/sh |
+| `~/.config/environment.d/theme-manager.conf` | Generated systemd `environment.d` snippet for GUI apps/services |
+| `~/.config/hypr/theme_env.lua` | Generated `hl.env(...)` lines for Hyprland-launched apps |
 | `/tmp/nvim_theme_patch.lua` | Lua snippet patching `vim.env` in running nvim instances |

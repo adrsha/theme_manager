@@ -5,22 +5,28 @@
 //!
 //! Start via Hyprland: exec-once = theme-daemon
 
+use inotify::{Inotify, WatchMask};
 use std::fs;
 use std::path::PathBuf;
-use inotify::{Inotify, WatchMask};
-use theme_manager::{apply_theme, parse_theme, state_file, themes_dir};
+use theme_manager::{
+    amoled_state_file, apply_theme, resolve_theme, state_file, themes_dir,
+};
 
 fn read_current_theme() -> Option<String> {
     let content = fs::read_to_string(state_file()).ok()?;
     let name = content.trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn load_and_apply(name: &str) {
     let path = themes_dir().join(name);
-    match parse_theme(&path) {
+    match resolve_theme(&path) {
         Ok(theme) => apply_theme(&theme),
-        Err(e) => eprintln!("theme-daemon: failed to parse theme '{name}': {e}"),
+        Err(e) => eprintln!("theme-daemon: failed to resolve theme '{name}': {e}"),
     }
 }
 
@@ -44,6 +50,15 @@ fn main() {
     eprintln!("theme-daemon: starting");
 
     let state = ensure_state_file_exists();
+    let amoled_state = amoled_state_file();
+    if let Some(parent) = amoled_state.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|e| eprintln!("theme-daemon: could not create AMOLED state dir: {e}"));
+    }
+    if !amoled_state.exists() {
+        fs::write(&amoled_state, "false\n")
+            .unwrap_or_else(|e| eprintln!("theme-daemon: could not create AMOLED state file: {e}"));
+    }
 
     // Apply the current theme immediately on startup.
     if let Some(name) = read_current_theme() {
@@ -84,10 +99,13 @@ fn main() {
         };
 
         let state_filename = state.file_name();
+        let amoled_filename = amoled_state.file_name();
 
         for event in events {
-            // Only react to events on our specific state file.
-            if event.name.as_deref() != state_filename {
+            // Theme selection and AMOLED mode share the same apply pipeline.
+            if event.name != state_filename
+                && event.name != amoled_filename
+            {
                 continue;
             }
 
