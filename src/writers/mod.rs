@@ -28,6 +28,7 @@ mod gtk;
 mod hyprland;
 mod kitty;
 mod nvim;
+mod qt;
 mod swaync;
 mod variant;
 mod vicinae;
@@ -40,6 +41,7 @@ pub use gtk::{Gtk3Css, Gtk4Css};
 pub use hyprland::Hyprland;
 pub use kitty::Kitty;
 pub use nvim::NvimPatch;
+pub use qt::{KdeColors, Qt6Colors};
 pub use swaync::Swaync;
 pub use variant::{apply_system_variant, Gtk4Settings, GtkSettings, Qt6ct};
 pub use vicinae::Vicinae;
@@ -64,6 +66,8 @@ pub fn all_writers(theme: &Theme) -> Vec<Box<dyn Writer>> {
         Box::new(Gtk3Css),
         Box::new(Gtk4Css),
         Box::new(Qt6ct),
+        Box::new(Qt6Colors),
+        Box::new(KdeColors),
         Box::new(Zathura),
     ]
 }

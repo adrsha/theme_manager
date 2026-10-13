@@ -9,7 +9,9 @@ use inotify::{Inotify, WatchMask};
 use std::fs;
 use std::path::PathBuf;
 use theme_manager::{
-    amoled_state_file, apply_theme, resolve_theme, state_file, themes_dir,
+    amoled_enabled, amoled_state_file, apply_amoled_palette, apply_style_defaults, apply_theme,
+    dynamic::{current_wallpaper, resolve_dynamic_palette},
+    env_sh_file, parse_theme, resolve_theme, state_file, themes_dir,
 };
 
 fn read_current_theme() -> Option<String> {
@@ -28,6 +30,34 @@ fn load_and_apply(name: &str) {
         Ok(theme) => apply_theme(&theme),
         Err(e) => eprintln!("theme-daemon: failed to resolve theme '{name}': {e}"),
     }
+}
+
+fn apply_changed_wallpaper(name: &str, wallpaper: &std::path::Path) {
+    let result = (|| {
+        let mut theme = parse_theme(&themes_dir().join(name))?;
+        if theme.vars.get("MODE").map(String::as_str) != Some("dynamic") {
+            return Ok::<_, theme_manager::ThemeError>(());
+        }
+        theme
+            .vars
+            .insert("WALLPAPER".into(), wallpaper.to_string_lossy().into_owned());
+        resolve_dynamic_palette(&mut theme)?;
+        if amoled_enabled() {
+            apply_amoled_palette(&mut theme);
+        }
+        apply_style_defaults(&mut theme)?;
+        apply_theme(&theme);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("theme-daemon: wallpaper update failed: {error}");
+    }
+}
+
+fn active_dynamic_theme(name: &str) -> bool {
+    parse_theme(&themes_dir().join(name))
+        .ok()
+        .is_some_and(|theme| theme.vars.get("MODE").map(String::as_str) == Some("dynamic"))
 }
 
 fn ensure_state_file_exists() -> PathBuf {
@@ -85,6 +115,21 @@ fn main() {
             std::process::exit(1);
         });
 
+    // Parent watches also catch editor/importer atomic replacements.
+    let theme_watch = inotify
+        .watches()
+        .add(themes_dir(), WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO)
+        .expect("could not watch theme directory");
+    let env_path = env_sh_file();
+    let env_watch = inotify
+        .watches()
+        .add(
+            env_path.parent().unwrap(),
+            WatchMask::CLOSE_WRITE | WatchMask::MOVED_TO,
+        )
+        .expect("could not watch theme environment directory");
+    let mut last_wallpaper = current_wallpaper();
+
     eprintln!("theme-daemon: watching {}", watch_dir.display());
 
     let mut buffer = [0u8; 1024];
@@ -102,10 +147,32 @@ fn main() {
         let amoled_filename = amoled_state.file_name();
 
         for event in events {
+            if event.wd == theme_watch {
+                if let Some(name) = read_current_theme() {
+                    if event.name.and_then(|n| n.to_str()) == Some(name.as_str())
+                        && active_dynamic_theme(&name)
+                    {
+                        load_and_apply(&name);
+                        last_wallpaper = current_wallpaper();
+                    }
+                }
+                continue;
+            }
+            if event.wd == env_watch {
+                if event.name == env_path.file_name() {
+                    let wallpaper = current_wallpaper();
+                    if wallpaper != last_wallpaper {
+                        last_wallpaper = wallpaper.clone();
+                        if let (Some(name), Some(path)) = (read_current_theme(), wallpaper) {
+                            apply_changed_wallpaper(&name, &path);
+                            last_wallpaper = current_wallpaper();
+                        }
+                    }
+                }
+                continue;
+            }
             // Theme selection and AMOLED mode share the same apply pipeline.
-            if event.name != state_filename
-                && event.name != amoled_filename
-            {
+            if event.name != state_filename && event.name != amoled_filename {
                 continue;
             }
 
@@ -113,6 +180,7 @@ fn main() {
                 Some(name) => {
                     eprintln!("theme-daemon: theme changed to '{name}'");
                     load_and_apply(&name);
+                    last_wallpaper = current_wallpaper();
                 }
                 None => {
                     eprintln!("theme-daemon: state file is empty, ignoring");

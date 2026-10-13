@@ -236,7 +236,7 @@ palettes stay intact. Restart apps that do not reload their appearance live.
 | GTK 4 | `~/.config/gtk-4.0/theme-manager.ini` | snippet: merge `[Settings]` into `settings.ini` once (header says how) |
 | GTK 3/4 CSS | `~/.local/share/themes/ThemeManager/gtk-3.0/gtk.css` and `gtk-4.0/gtk.css` | selected by `GTK_THEME=ThemeManager` or GNOME `gtk-theme`; restart apps |
 | App-neutral API | `~/.local/state/theme/active.json` | atomic update; watch parent directory for `MOVED_TO` |
-| Qt6ct | `~/.config/qt6ct/theme-manager.conf` | snippet: copy `color_scheme_path` into `qt6ct.conf` once (header says how) |
+| Qt6ct | `~/.config/qt6ct/theme-manager.conf`, `~/.config/qt6ct/colors/theme-manager.conf` | copy `color_scheme_path` and `style` into `qt6ct.conf` once; generated colors update on switches |
 | Wallpaper | `~/.local/state/theme/active.json` | Quickshell watches `values.WALLPAPER` |
 | Neovim base46 | cache | `nvim --headless` recompile |
 
@@ -306,9 +306,12 @@ activation environment also receives `THEME_VARIANT`, `GTK_THEME`, and
 inherit the selected variant. Running apps that watch the XDG settings portal
 update immediately. GTK 3/4 theme CSS is regenerated from Base16 colors on
 switch: window surfaces, headerbars, buttons, entries, switches, checks, tabs,
-lists, menus, scrollbars, focus/selection, and disabled states. Theme files live
-under `~/.local/share/themes/ThemeManager/`; apps generally need a restart to
-pick up CSS changes. Libadwaita apps may ignore custom GTK CSS themes.
+lists, menus, scrollbars, focus/selection, and disabled states. GTK 3 and GTK 4
+styles now use the Darkly GTK widget rules (LGPL-2.1-or-later), recolored from
+the active palette, with dark/light GTK 3 variants and bundled symbolic assets.
+Theme files live under `~/.local/share/themes/ThemeManager/`; apps generally
+need a restart to pick up CSS changes. Libadwaita apps may ignore custom GTK
+CSS themes.
 For file-based setups without a portal, merge the
 `theme-manager.ini` snippet (written next to each `settings.ini`, header
 explains how) into your own `settings.ini` once — the manager never edits
@@ -332,14 +335,22 @@ ignored. `opacity` uses the resolved `TRANSPARENT` value (`1` means opaque).
 Theme selection still uses `theme-set <name>` and `~/.local/state/theme/current`.
 GTK's `ThemeManager` theme name is unrelated to any shell framework. Existing
 old GTK theme directories are left alone; remove them manually if unwanted.
+Generated Darkly GTK3/4 styles add restrained 4/8px spacing to toolbar buttons,
+menus, tabs, inputs, and popovers. LibreOffice uses GTK3 VCL on this system,
+but its document grid and some toolbar layout are drawn internally: GTK CSS
+cannot change all LibreOffice spacing. Restart LibreOffice after updating theme.
 
 ### Qt dark/light
 
-`VARIANT=dark` writes `color_scheme_path=.../darker.conf` into the
-`theme-manager.conf` snippet, `light` writes `airy.conf`. Copy that line into
-the `[Appearance]` section of your own `~/.config/qt6ct/qt6ct.conf` once (the
-snippet header shows exactly how). Your `qt6ct.conf` is never touched by the
-manager. Qt apps need a restart.
+Theme switches generate a 22-role Qt6ct palette at
+`~/.config/qt6ct/colors/theme-manager.conf` and Darkly-compatible KDE colors at
+`~/.local/share/color-schemes/ThemeManager.colors`. Copy `color_scheme_path` and
+`style=darkly` from `~/.config/qt6ct/theme-manager.conf` into `[Appearance]` of
+your `~/.config/qt6ct/qt6ct.conf` once. Install Darkly Qt6 style plugin
+separately; theme-manager does not compile or ship it. Without the plugin,
+keep your existing `style` line and still use the generated Qt palette. KDE
+apps may need the `ThemeManager` color scheme selected separately. Restart Qt
+apps after switching; your `qt6ct.conf` is never modified by theme-manager.
 
 ### Wallpaper
 

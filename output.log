@@ -1,1 +1,90 @@
-setsid: failed to execute theme-daemon: No such file or directory
+theme-daemon: starting
+theme-daemon: applying initial theme 'fog'
+theme-manager: [fish] wrote /home/chilly/.config/fish/conf.d/theme_vars.fish
+theme-manager: [env-sh] wrote /home/chilly/.config/theme-manager/theme_env.sh
+theme-manager: [env-systemd] wrote /home/chilly/.config/environment.d/theme-manager.conf
+theme-manager: [hypr-env] wrote /home/chilly/.config/hypr/theme_env.lua
+theme-manager: [ghostty] skipped (not installed)
+theme-manager: [hyprland] wrote /home/chilly/.config/hypr/colors.lua
+theme-manager: [kitty] wrote /home/chilly/.config/kitty/themes/active.conf
+theme-manager: [vicinae] skipped (not installed)
+theme-manager: [swaync] wrote /home/chilly/.config/swaync/theme-vars.css
+theme-manager: [nvim-patch] wrote /tmp/nvim_theme_patch.lua
+theme-manager: [gtk] wrote /home/chilly/.config/gtk-3.0/theme-manager.ini
+theme-manager: [gtk4] wrote /home/chilly/.config/gtk-4.0/theme-manager.ini
+theme-manager: [gtk3-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-3.0/gtk.css
+theme-manager: [gtk4-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-4.0/gtk.css
+theme-manager: [qt6ct] wrote /home/chilly/.config/qt6ct/theme-manager.conf
+theme-manager: [zathura] wrote /home/chilly/.config/zathura/themes/active
+theme-manager: [nvim] recompiled base46 cache
+theme-manager: [variant] gsettings color-scheme → prefer-dark
+theme-manager: [variant] gsettings gtk-theme → ThemeManager
+theme-manager: [env] systemctl --user set-environment updated
+theme-manager: [env] dbus-update-activation-environment updated
+theme-daemon: watching /home/chilly/.local/state/theme
+theme-daemon: theme changed to 'fog'
+theme-manager: [fish] wrote /home/chilly/.config/fish/conf.d/theme_vars.fish
+theme-manager: [env-sh] wrote /home/chilly/.config/theme-manager/theme_env.sh
+theme-manager: [env-systemd] wrote /home/chilly/.config/environment.d/theme-manager.conf
+theme-manager: [hypr-env] wrote /home/chilly/.config/hypr/theme_env.lua
+theme-manager: [ghostty] skipped (not installed)
+theme-manager: [hyprland] wrote /home/chilly/.config/hypr/colors.lua
+theme-manager: [kitty] wrote /home/chilly/.config/kitty/themes/active.conf
+theme-manager: [vicinae] skipped (not installed)
+theme-manager: [swaync] wrote /home/chilly/.config/swaync/theme-vars.css
+theme-manager: [nvim-patch] wrote /tmp/nvim_theme_patch.lua
+theme-manager: [gtk] wrote /home/chilly/.config/gtk-3.0/theme-manager.ini
+theme-manager: [gtk4] wrote /home/chilly/.config/gtk-4.0/theme-manager.ini
+theme-manager: [gtk3-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-3.0/gtk.css
+theme-manager: [gtk4-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-4.0/gtk.css
+theme-manager: [qt6ct] wrote /home/chilly/.config/qt6ct/theme-manager.conf
+theme-manager: [zathura] wrote /home/chilly/.config/zathura/themes/active
+theme-manager: [nvim] recompiled base46 cache
+theme-manager: [variant] gsettings color-scheme → prefer-dark
+theme-manager: [variant] gsettings gtk-theme → ThemeManager
+theme-manager: [env] systemctl --user set-environment updated
+theme-manager: [env] dbus-update-activation-environment updated
+theme-daemon: theme changed to 'fog'
+theme-manager: [fish] wrote /home/chilly/.config/fish/conf.d/theme_vars.fish
+theme-manager: [env-sh] wrote /home/chilly/.config/theme-manager/theme_env.sh
+theme-manager: [env-systemd] wrote /home/chilly/.config/environment.d/theme-manager.conf
+theme-manager: [hypr-env] wrote /home/chilly/.config/hypr/theme_env.lua
+theme-manager: [ghostty] skipped (not installed)
+theme-manager: [hyprland] wrote /home/chilly/.config/hypr/colors.lua
+theme-manager: [kitty] wrote /home/chilly/.config/kitty/themes/active.conf
+theme-manager: [vicinae] skipped (not installed)
+theme-manager: [swaync] wrote /home/chilly/.config/swaync/theme-vars.css
+theme-manager: [nvim-patch] wrote /tmp/nvim_theme_patch.lua
+theme-manager: [gtk] wrote /home/chilly/.config/gtk-3.0/theme-manager.ini
+theme-manager: [gtk4] wrote /home/chilly/.config/gtk-4.0/theme-manager.ini
+theme-manager: [gtk3-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-3.0/gtk.css
+theme-manager: [gtk4-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-4.0/gtk.css
+theme-manager: [qt6ct] wrote /home/chilly/.config/qt6ct/theme-manager.conf
+theme-manager: [zathura] wrote /home/chilly/.config/zathura/themes/active
+theme-manager: [nvim] recompiled base46 cache
+theme-manager: [variant] gsettings color-scheme → prefer-dark
+theme-manager: [variant] gsettings gtk-theme → ThemeManager
+theme-manager: [env] systemctl --user set-environment updated
+theme-manager: [env] dbus-update-activation-environment updated
+theme-daemon: theme changed to 'fog'
+theme-manager: [fish] wrote /home/chilly/.config/fish/conf.d/theme_vars.fish
+theme-manager: [env-sh] wrote /home/chilly/.config/theme-manager/theme_env.sh
+theme-manager: [env-systemd] wrote /home/chilly/.config/environment.d/theme-manager.conf
+theme-manager: [hypr-env] wrote /home/chilly/.config/hypr/theme_env.lua
+theme-manager: [ghostty] skipped (not installed)
+theme-manager: [hyprland] wrote /home/chilly/.config/hypr/colors.lua
+theme-manager: [kitty] wrote /home/chilly/.config/kitty/themes/active.conf
+theme-manager: [vicinae] skipped (not installed)
+theme-manager: [swaync] wrote /home/chilly/.config/swaync/theme-vars.css
+theme-manager: [nvim-patch] wrote /tmp/nvim_theme_patch.lua
+theme-manager: [gtk] wrote /home/chilly/.config/gtk-3.0/theme-manager.ini
+theme-manager: [gtk4] wrote /home/chilly/.config/gtk-4.0/theme-manager.ini
+theme-manager: [gtk3-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-3.0/gtk.css
+theme-manager: [gtk4-css] wrote /home/chilly/.local/share/themes/ThemeManager/gtk-4.0/gtk.css
+theme-manager: [qt6ct] wrote /home/chilly/.config/qt6ct/theme-manager.conf
+theme-manager: [zathura] wrote /home/chilly/.config/zathura/themes/active
+theme-manager: [nvim] recompiled base46 cache
+theme-manager: [variant] gsettings color-scheme → prefer-dark
+theme-manager: [variant] gsettings gtk-theme → ThemeManager
+theme-manager: [env] systemctl --user set-environment updated
+theme-manager: [env] dbus-update-activation-environment updated

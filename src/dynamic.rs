@@ -11,7 +11,24 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
         return Ok(());
     }
 
-    let wallpaper = resolve_wallpaper(theme)?;
+    // A stale wallpaper must not prevent selecting a dynamic theme. Retain
+    // the last published palette and wallpaper until a new source is assigned.
+    let wallpaper = match resolve_wallpaper(theme) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("theme-manager: {error}; retaining current colors");
+            let content = fs::read_to_string(env_sh_file()).unwrap_or_default();
+            retain_current_palette(theme, &content)?;
+            if let Some(path) = current_wallpaper() {
+                theme
+                    .vars
+                    .insert("WALLPAPER".into(), path.to_string_lossy().into_owned());
+            } else {
+                theme.vars.insert("WALLPAPER".into(), "none".into());
+            }
+            return Ok(());
+        }
+    };
     theme.vars.insert(
         "WALLPAPER".to_string(),
         wallpaper.to_string_lossy().into_owned(),
@@ -27,6 +44,40 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
     }
 
     Ok(())
+}
+
+fn retain_current_palette(theme: &mut Theme, content: &str) -> Result<(), ThemeError> {
+    let defaults = generate_palette(&[Rgb(98, 114, 164); 4], theme.require("VARIANT")?)?;
+    let current = parse_published_colors(content);
+    for (key, default) in defaults {
+        // Preserve current colors even if the new dynamic theme has overrides:
+        // without a source image, selecting it is not a request to recolor.
+        let value = current
+            .get(&key)
+            .cloned()
+            .or_else(|| theme.vars.get(&key).cloned())
+            .unwrap_or(default);
+        theme.vars.insert(key, value);
+    }
+    for (key, value) in current {
+        theme.vars.insert(key, value);
+    }
+    Ok(())
+}
+
+fn parse_published_colors(content: &str) -> HashMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.trim().strip_prefix("export THEME_")?.split_once('=')?;
+            let value = value.trim().trim_matches('\'');
+            if crate::hex_to_rgb(value).is_ok() {
+                Some((key.to_string(), value.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn resolve_wallpaper(theme: &Theme) -> Result<PathBuf, ThemeError> {
@@ -56,7 +107,7 @@ fn resolve_wallpaper(theme: &Theme) -> Result<PathBuf, ThemeError> {
     Ok(value)
 }
 
-fn current_wallpaper() -> Option<PathBuf> {
+pub fn current_wallpaper() -> Option<PathBuf> {
     // Last switch wins: fish, POSIX, then the live process environment
     // (now global, so non-fish processes resolve here too).
     if let Ok(content) = fs::read_to_string(fish_conf_file()) {
@@ -370,7 +421,10 @@ fn hsl_to_rgb(Hsl(h, s, l): Hsl) -> Rgb {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_palette, parse_fish_wallpaper, parse_sh_wallpaper, resolve_dynamic_palette, rgb_to_hsl, Rgb};
+    use super::{
+        generate_palette, parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper,
+        resolve_dynamic_palette, retain_current_palette, rgb_to_hsl, Rgb,
+    };
     use crate::Theme;
     use std::collections::HashMap;
     use std::fs;
@@ -523,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_mode_requires_a_wallpaper() {
+    fn dynamic_mode_without_wallpaper_can_still_resolve() {
         let mut theme = Theme {
             name: "missing-wallpaper".to_string(),
             path: "missing-wallpaper".into(),
@@ -532,6 +586,32 @@ mod tests {
                 ("MODE".to_string(), "dynamic".to_string()),
             ]),
         };
-        assert!(resolve_dynamic_palette(&mut theme).is_err());
+        resolve_dynamic_palette(&mut theme).unwrap();
+        assert!(theme.vars.contains_key("BASE00"));
+        assert!(theme.vars.contains_key("BASE0F"));
+    }
+    #[test]
+    fn missing_wallpaper_retains_published_colors_not_new_overrides() {
+        let mut theme = Theme {
+            name: "fallback".into(),
+            path: "fallback".into(),
+            vars: HashMap::from([
+                ("VARIANT".into(), "dark".into()),
+                ("BASE00".into(), "#ffffff".into()),
+            ]),
+        };
+        retain_current_palette(&mut theme,
+            "export THEME_BASE00='#123456'\nexport THEME_BASE0D='#abcdef'\nexport THEME_BORDER_COLOR='#334455'\n").unwrap();
+        assert_eq!(theme.vars["BASE00"], "#123456");
+        assert_eq!(theme.vars["BASE0D"], "#abcdef");
+        assert_eq!(theme.vars["BORDER_COLOR"], "#334455");
+        assert!(theme.vars.contains_key("WHITE"));
+    }
+
+    #[test]
+    fn published_palette_ignores_non_colors_and_invalid_values() {
+        let colors = parse_published_colors("export THEME_NAME='carbon'\nexport THEME_BASE00='bad'\nexport THEME_BASE01='#123456'\n");
+        assert_eq!(colors.len(), 1);
+        assert_eq!(colors["BASE01"], "#123456");
     }
 }
