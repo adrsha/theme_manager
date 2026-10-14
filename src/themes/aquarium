@@ -1,0 +1,56 @@
+# aquarium theme
+VARIANT=dark
+WALLPAPER=none
+
+# base_16
+BASE00=#20202A
+BASE01=#3b3b4d
+BASE02=#44495E
+BASE03=#63718B
+BASE04=#C6D0E9
+BASE05=#63718B
+BASE06=#C6D0E9
+BASE07=#E5E9F0
+BASE08=#ebb9b9
+BASE09=#ebe3b9
+BASE0A=#ebe3b9
+BASE0B=#caf6bb
+BASE0C=#b8dceb
+BASE0D=#cddbf9
+BASE0E=#f6bbe7
+BASE0F=#cc9b9d
+
+# base_30
+WHITE         =#C6D0E9
+DARKER_BLACK  =#1a1a22
+BLACK         =#20202A
+BLACK2        =#242430
+ONE_BG        =#2a2a36
+ONE_BG2       =#323240
+ONE_BG3       =#3a3a48
+GREY          =#44495E
+GREY_FG       =#4a4f64
+GREY_FG2      =#505570
+LIGHT_GREY    =#5a5f74
+RED           =#ebb9b9
+BABY_PINK     =#f6bbe7
+PINK          =#cc9b9d
+LINE          =#2C2E3E
+GREEN         =#caf6bb
+VIBRANT_GREEN =#a3ccad
+BLUE          =#cddbf9
+NORD_BLUE     =#B8C9EA
+YELLOW        =#ebe3b9
+SUN           =#d1ba97
+PURPLE        =#f6bbe7
+DARK_PURPLE   =#c497b3
+TEAL          =#b8dceb
+ORANGE        =#ebe3b9
+CYAN          =#95C2D1
+STATUSLINE_BG =#242430
+LIGHTBG       =#2a2a36
+PMENU_BG      =#cddbf9
+FOLDER_BG     =#cddbf9
+CORNER_RADIUS=20
+BORDER_SIZE=0
+BORDER_COLOR=#44495e
