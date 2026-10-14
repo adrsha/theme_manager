@@ -586,13 +586,14 @@ mod tests {
 
     #[test]
     fn conditional_writers_point_at_real_config_paths() {
-        use crate::writers::{Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings, HyprEnv, Hyprland, Kitty, Qt6ct, Zathura};
+        use crate::writers::{Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings, HyprEnv, Hyprland, Kitty, Mango, Qt6ct, Zathura};
         let home = super::home();
         assert_eq!(
             Ghostty.output_path(),
             home.join(".config/ghostty/themes/active")
         );
         assert_eq!(Hyprland.output_path(), home.join(".config/hypr/colors.lua"));
+        assert_eq!(Mango.output_path(), home.join(".config/mango/theme.conf"));
         assert_eq!(HyprEnv.output_path(), home.join(".config/hypr/theme_env.lua"));
         // Global env files: POSIX for all sh-compatible shells, systemd for GUI apps.
         assert_eq!(
@@ -640,7 +641,7 @@ mod tests {
     fn every_writer_emits_a_manager_owned_file_with_import_tutorial() {
         use crate::writers::{
             EnvSh, EnvSystemd, FishConf, Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings,
-            HyprEnv, Hyprland, Kitty, NvimPatch, Qt6ct, Zathura,
+            HyprEnv, Hyprland, Kitty, Mango, NvimPatch, Qt6ct, Zathura,
         };
 
         let mut t = theme("dark");
@@ -682,6 +683,7 @@ mod tests {
         let outputs: Vec<(&str, String, &str)> = vec![
             ("ghostty", Ghostty.generate(&t).unwrap(), "config-file"),
             ("hyprland", Hyprland.generate(&t).unwrap(), "require"),
+            ("mango", Mango.generate(&t).unwrap(), "source_optional"),
             (
                 "kitty",
                 Kitty.generate(&t).unwrap(),

@@ -227,6 +227,7 @@ palettes stay intact. Restart apps that do not reload their appearance live.
 | Hyprland env | `~/.config/hypr/theme_env.lua` | `require("theme_env")` in `hyprland.lua`, live via `hyprctl setenv` |
 | Ghostty | `~/.config/ghostty/themes/active` | `config-file = ~/.config/ghostty/themes/active` |
 | Hyprland | `~/.config/hypr/colors.lua` | `require("colors")` in `hyprland.lua`, then `hyprctl reload config-only` |
+| Mango           | `~/.config/mango/theme.conf`                                                      | `source_optional=~/.config/mango/theme.conf` in `config.conf` (below your own colors), then `mmsg dispatch reload_config` |
 | Kitty | `~/.config/kitty/themes/active.conf` | `include themes/active.conf` in `kitty.conf` |
 | Vicinae | `~/.config/vicinae/themes/<name>.toml` | `vicinae theme set <name>` |
 | swaync | `~/.config/swaync/theme-vars.css` | `@import url("theme-vars.css");` at top of your `style.css`, then `swaync-client -rs` |

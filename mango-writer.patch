@@ -1,0 +1,254 @@
+diff --git a/README.md b/README.md
+index 65789e6..4320118 100644
+--- a/README.md
++++ b/README.md
+@@ -227,6 +227,7 @@ palettes stay intact. Restart apps that do not reload their appearance live.
+ | Hyprland env | `~/.config/hypr/theme_env.lua` | `require("theme_env")` in `hyprland.lua`, live via `hyprctl setenv` |
+ | Ghostty | `~/.config/ghostty/themes/active` | `config-file = ~/.config/ghostty/themes/active` |
+ | Hyprland | `~/.config/hypr/colors.lua` | `require("colors")` in `hyprland.lua`, then `hyprctl reload config-only` |
++| Mango           | `~/.config/mango/theme.conf`                                                      | `source_optional=~/.config/mango/theme.conf` in `config.conf` (below your own colors), then `mmsg dispatch reload_config` |
+ | Kitty | `~/.config/kitty/themes/active.conf` | `include themes/active.conf` in `kitty.conf` |
+ | Vicinae | `~/.config/vicinae/themes/<name>.toml` | `vicinae theme set <name>` |
+ | swaync | `~/.config/swaync/theme-vars.css` | `@import url("theme-vars.css");` at top of your `style.css`, then `swaync-client -rs` |
+diff --git a/src/lib.rs b/src/lib.rs
+index c914aa6..b5230fd 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -586,13 +586,14 @@ mod tests {
+ 
+     #[test]
+     fn conditional_writers_point_at_real_config_paths() {
+-        use crate::writers::{Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings, HyprEnv, Hyprland, Kitty, Qt6ct, Zathura};
++        use crate::writers::{Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings, HyprEnv, Hyprland, Kitty, Mango, Qt6ct, Zathura};
+         let home = super::home();
+         assert_eq!(
+             Ghostty.output_path(),
+             home.join(".config/ghostty/themes/active")
+         );
+         assert_eq!(Hyprland.output_path(), home.join(".config/hypr/colors.lua"));
++        assert_eq!(Mango.output_path(), home.join(".config/mango/theme.conf"));
+         assert_eq!(HyprEnv.output_path(), home.join(".config/hypr/theme_env.lua"));
+         // Global env files: POSIX for all sh-compatible shells, systemd for GUI apps.
+         assert_eq!(
+@@ -640,7 +641,7 @@ mod tests {
+     fn every_writer_emits_a_manager_owned_file_with_import_tutorial() {
+         use crate::writers::{
+             EnvSh, EnvSystemd, FishConf, Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings,
+-            HyprEnv, Hyprland, Kitty, NvimPatch, Qt6ct, Zathura,
++            HyprEnv, Hyprland, Kitty, Mango, NvimPatch, Qt6ct, Zathura,
+         };
+ 
+         let mut t = theme("dark");
+@@ -682,6 +683,7 @@ mod tests {
+         let outputs: Vec<(&str, String, &str)> = vec![
+             ("ghostty", Ghostty.generate(&t).unwrap(), "config-file"),
+             ("hyprland", Hyprland.generate(&t).unwrap(), "require"),
++            ("mango", Mango.generate(&t).unwrap(), "source_optional"),
+             (
+                 "kitty",
+                 Kitty.generate(&t).unwrap(),
+diff --git a/src/writers/mango.rs b/src/writers/mango.rs
+new file mode 100644
+index 0000000..139447c
+--- /dev/null
++++ b/src/writers/mango.rs
+@@ -0,0 +1,171 @@
++use crate::{hex_to_rgb, Theme, ThemeError, Writer};
++use std::path::PathBuf;
++use std::process::{Command, Stdio};
++
++/// Generated colours for the mango (mangowc) compositor.
++///
++/// Only colours are generated. Geometry (`border_px`, `border_radius`, gaps)
++/// stays in the user's own mango config: theme defaults (BORDER_SIZE=0) would
++/// otherwise silently remove borders the user configured there.
++///
++/// Fallback behaviour: the user keeps hard-coded colours in their own config
++/// *above* the `source_optional` line. Mango ignores a missing optional file,
++/// and this writer skips any colour it cannot resolve instead of failing, so
++/// mango always has a complete, readable palette.
++pub struct Mango;
++
++/// (mango option, theme key, fallback theme key, alpha byte as hex)
++const COLORS: &[(&str, &str, Option<&str>, &str)] = &[
++    ("root_color", "DARKER_BLACK", Some("BASE00"), "ff"),
++    ("border_color", "BORDER_COLOR", None, "ff"),
++    ("focus_color", "BASE0D", None, "ff"),
++    ("urgent_color", "BASE08", None, "ff"),
++    ("maximized_screen_color", "BASE0A", None, "ff"),
++    ("scratchpad_color", "BASE09", None, "ff"),
++    ("global_color", "BASE0E", None, "ff"),
++    ("overlay_color", "BASE0B", None, "ff"),
++    ("drop_color", "BASE0B", None, "55"),
++    ("split_color", "BASE09", None, "ff"),
++];
++
++/// "#rrggbb" + alpha byte -> mango's "0xrrggbbaa".
++fn mango_color(hex: &str, alpha: &str) -> Result<String, ThemeError> {
++    let (r, g, b) = hex_to_rgb(hex)?;
++    Ok(format!("0x{r:02x}{g:02x}{b:02x}{alpha}"))
++}
++
++impl Writer for Mango {
++    fn name(&self) -> &'static str {
++        "mango"
++    }
++
++    fn output_path(&self) -> PathBuf {
++        crate::home().join(".config/mango/theme.conf")
++    }
++
++    fn enabled(&self) -> bool {
++        crate::app_enabled("mango", ".config/mango")
++    }
++
++    fn generate(&self, theme: &Theme) -> Result<String, ThemeError> {
++        let mut out = String::from(
++            "# Generated by theme-manager -- do not edit manually.\n\
++             # To use: add this line to ~/.config/mango/config.conf, AFTER your own\n\
++             # colour settings (those stay as the fallback if this file is missing):\n\
++             #   source_optional=~/.config/mango/theme.conf\n\
++             #\n",
++        );
++
++        for (option, key, fallback, alpha) in COLORS {
++            let value = theme
++                .vars
++                .get(*key)
++                .or_else(|| fallback.and_then(|f| theme.vars.get(f)));
++            let Some(value) = value else {
++                eprintln!("theme-manager: [mango] {key} not in theme, keeping mango's own {option}");
++                continue;
++            };
++            match mango_color(value, alpha) {
++                Ok(color) => out.push_str(&format!("{option}={color}\n")),
++                Err(error) => {
++                    eprintln!("theme-manager: [mango] skipping {option}: {error}")
++                }
++            }
++        }
++        Ok(out)
++    }
++
++    fn reload(&self) {
++        // mmsg talks to mango over Wayland, so it needs WAYLAND_DISPLAY. A
++        // systemd user service usually does not have it: find the socket.
++        let display = std::env::var("WAYLAND_DISPLAY")
++            .ok()
++            .filter(|d| !d.is_empty())
++            .or_else(find_wayland_socket);
++
++        // Current syntax first, then the older `-d` flag form.
++        let attempts: [&[&str]; 2] = [&["dispatch", "reload_config"], &["-d", "reload_config"]];
++        for args in attempts {
++            let mut cmd = Command::new("mmsg");
++            cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
++            if let Some(display) = &display {
++                cmd.env("WAYLAND_DISPLAY", display);
++            }
++            if cmd.status().map(|s| s.success()).unwrap_or(false) {
++                return;
++            }
++        }
++        eprintln!("theme-manager: [mango] reload failed (mmsg missing or mango not running)");
++    }
++}
++
++/// First `wayland-N` socket in $XDG_RUNTIME_DIR.
++fn find_wayland_socket() -> Option<String> {
++    let dir = std::env::var("XDG_RUNTIME_DIR").ok()?;
++    let mut names: Vec<String> = std::fs::read_dir(dir)
++        .ok()?
++        .flatten()
++        .map(|e| e.file_name().to_string_lossy().into_owned())
++        .filter(|n| n.starts_with("wayland-") && !n.ends_with(".lock"))
++        .collect();
++    names.sort();
++    names.into_iter().next()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::collections::HashMap;
++
++    fn theme(vars: &[(&str, &str)]) -> Theme {
++        Theme {
++            name: "t".into(),
++            path: "/tmp/t".into(),
++            vars: HashMap::from_iter(vars.iter().map(|(k, v)| (k.to_string(), v.to_string()))),
++        }
++    }
++
++    #[test]
++    fn emits_mango_colour_format() {
++        let t = theme(&[
++            ("DARKER_BLACK", "#0a0b0c"),
++            ("BORDER_COLOR", "#445566"),
++            ("BASE0D", "#8baa9b"),
++            ("BASE0B", "#95c381"),
++        ]);
++        let out = Mango.generate(&t).unwrap();
++        assert!(out.contains("root_color=0x0a0b0cff\n"));
++        assert!(out.contains("border_color=0x445566ff\n"));
++        assert!(out.contains("focus_color=0x8baa9bff\n"));
++        assert!(out.contains("overlay_color=0x95c381ff\n"));
++        assert!(out.contains("drop_color=0x95c38155\n"));
++        assert!(out.contains("source_optional=~/.config/mango/theme.conf"));
++    }
++
++    #[test]
++    fn skips_missing_or_invalid_colours_instead_of_failing() {
++        let t = theme(&[("BASE0D", "#8baa9b"), ("BASE08", "not-a-colour")]);
++        let out = Mango.generate(&t).unwrap();
++        assert!(out.contains("focus_color=0x8baa9bff\n"));
++        // Invalid and absent keys produce no line, so mango keeps its own value.
++        assert!(!out.contains("urgent_color"));
++        assert!(!out.contains("global_color"));
++    }
++
++    #[test]
++    fn root_colour_falls_back_to_base00() {
++        let t = theme(&[("BASE00", "#101112")]);
++        assert!(Mango
++            .generate(&t)
++            .unwrap()
++            .contains("root_color=0x101112ff\n"));
++    }
++
++    #[test]
++    fn never_generates_geometry() {
++        let t = theme(&[("BORDER_SIZE", "0"), ("CORNER_RADIUS", "20")]);
++        let out = Mango.generate(&t).unwrap();
++        assert!(!out.contains("border_px"));
++        assert!(!out.contains("border_radius"));
++    }
++}
+diff --git a/src/writers/mod.rs b/src/writers/mod.rs
+index 625e511..e916c85 100644
+--- a/src/writers/mod.rs
++++ b/src/writers/mod.rs
+@@ -27,6 +27,7 @@ mod ghostty;
+ mod gtk;
+ mod hyprland;
+ mod kitty;
++mod mango;
+ mod nvim;
+ mod qt;
+ mod swaync;
+@@ -40,6 +41,7 @@ pub use ghostty::Ghostty;
+ pub use gtk::{Gtk3Css, Gtk4Css};
+ pub use hyprland::Hyprland;
+ pub use kitty::Kitty;
++pub use mango::Mango;
+ pub use nvim::NvimPatch;
+ pub use qt::{KdeColors, Qt6Colors};
+ pub use swaync::Swaync;
+@@ -55,6 +57,7 @@ pub fn all_writers(theme: &Theme) -> Vec<Box<dyn Writer>> {
+     vec![
+         Box::new(Ghostty),
+         Box::new(Hyprland),
++        Box::new(Mango),
+         Box::new(Kitty),
+         Box::new(Vicinae {
+             name: theme.name.clone(),

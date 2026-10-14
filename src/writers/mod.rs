@@ -27,6 +27,7 @@ mod ghostty;
 mod gtk;
 mod hyprland;
 mod kitty;
+mod mango;
 mod nvim;
 mod qt;
 mod swaync;
@@ -40,6 +41,7 @@ pub use ghostty::Ghostty;
 pub use gtk::{Gtk3Css, Gtk4Css};
 pub use hyprland::Hyprland;
 pub use kitty::Kitty;
+pub use mango::Mango;
 pub use nvim::NvimPatch;
 pub use qt::{KdeColors, Qt6Colors};
 pub use swaync::Swaync;
@@ -55,6 +57,7 @@ pub fn all_writers(theme: &Theme) -> Vec<Box<dyn Writer>> {
     vec![
         Box::new(Ghostty),
         Box::new(Hyprland),
+        Box::new(Mango),
         Box::new(Kitty),
         Box::new(Vicinae {
             name: theme.name.clone(),
