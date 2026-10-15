@@ -34,6 +34,7 @@ mod swaync;
 mod variant;
 mod vicinae;
 mod zathura;
+mod tty;
 
 pub use env::{apply_global_env, EnvSh, EnvSystemd, HyprEnv};
 pub use fish_conf::FishConf;
@@ -48,6 +49,7 @@ pub use swaync::Swaync;
 pub use variant::{apply_system_variant, Gtk4Settings, GtkSettings, Qt6ct};
 pub use vicinae::Vicinae;
 pub use zathura::Zathura;
+pub use tty::Tty;
 
 use crate::{Theme, Writer};
 
@@ -72,6 +74,7 @@ pub fn all_writers(theme: &Theme) -> Vec<Box<dyn Writer>> {
         Box::new(Qt6Colors),
         Box::new(KdeColors),
         Box::new(Zathura),
+        Box::new(Tty),
     ]
 }
 
