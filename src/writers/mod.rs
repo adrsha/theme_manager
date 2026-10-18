@@ -22,6 +22,7 @@
 //! Wallpaper is rendered by Quickshell from the published theme snapshot.
 
 mod env;
+mod firefox;
 mod fish_conf;
 mod ghostty;
 mod gtk;
@@ -37,6 +38,7 @@ mod zathura;
 mod tty;
 
 pub use env::{apply_global_env, EnvSh, EnvSystemd, HyprEnv};
+pub use firefox::FirefoxCss;
 pub use fish_conf::FishConf;
 pub use ghostty::Ghostty;
 pub use gtk::{Gtk3Css, Gtk4Css};
@@ -57,6 +59,7 @@ use crate::{Theme, Writer};
 /// Add a `Box::new(MyApp)` here when you add a new target.
 pub fn all_writers(theme: &Theme) -> Vec<Box<dyn Writer>> {
     vec![
+        Box::new(FirefoxCss),
         Box::new(Ghostty),
         Box::new(Hyprland),
         Box::new(Mango),

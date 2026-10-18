@@ -231,6 +231,7 @@ palettes stay intact. Restart apps that do not reload their appearance live.
 | Kitty | `~/.config/kitty/themes/active.conf` | `include themes/active.conf` in `kitty.conf` |
 | Vicinae | `~/.config/vicinae/themes/<name>.toml` | `vicinae theme set <name>` |
 | swaync | `~/.config/swaync/theme-vars.css` | `@import url("theme-vars.css");` at top of your `style.css`, then `swaync-client -rs` |
+| Firefox palette | `~/.config/theme-manager/firefox-colors.css` | import from profile `chrome/userChrome.css`; use the variables in your own rules; restart Firefox |
 | Zathura | `~/.config/zathura/themes/active` | `include <path>` in `zathurarc` (exact line in file header) |
 | Neovim patch | `/tmp/nvim_theme_patch.lua` | `dofile("/tmp/nvim_theme_patch.lua")` in nvim config |
 | GTK 3 | `~/.config/gtk-3.0/theme-manager.ini` | snippet: merge `[Settings]` into `settings.ini` once (header says how) |
@@ -241,10 +242,11 @@ palettes stay intact. Restart apps that do not reload their appearance live.
 | Wallpaper | `~/.local/state/theme/active.json` | Quickshell watches `values.WALLPAPER` |
 | Neovim base46 | cache | `nvim --headless` recompile |
 
-Writers for Ghostty, Hyprland, Kitty, Vicinae, swaync, and Zathura are
+Writers for Ghostty, Hyprland, Kitty, Vicinae, swaync, Firefox, and Zathura are
 conditional: each one runs only when its binary is on `PATH` or its config
 directory already exists under `$HOME`. Uninstalled apps are skipped so theme
-switches don't create config bloat.
+switches don't create config bloat. Firefox recognizes both `~/.mozilla/firefox`
+and `~/.config/mozilla/firefox` as profile roots.
 
 ### Global environment variables
 
@@ -280,6 +282,40 @@ If Ghostty was launched directly instead of through systemd/D-Bus, the manager
 falls back to sending its documented config-reload signal (`SIGUSR2`) to an
 exactly named `ghostty` process. Both methods are best-effort, so switching a
 theme still succeeds when Ghostty is not installed or not running.
+
+### Firefox
+
+The Firefox writer publishes **palette variables only**, not a complete browser
+skin. It never edits your profile or your existing stylesheets.
+
+1. In `about:config`, set
+   `toolkit.legacyUserProfileCustomizations.stylesheets` to `true`.
+2. Open `about:support`, find **Profile Directory**, and open it. Create a
+   `chrome` directory there if needed, then create or edit `chrome/userChrome.css`.
+3. Put the following import at the top, before any style rules. Replace
+   `/home/YOU` with your actual home directory (Firefox does not expand `~`):
+
+   ```css
+   @import url("file:///home/YOU/.config/theme-manager/firefox-colors.css");
+
+   /* Example rules; adapt these to your own Firefox skin. */
+   #navigator-toolbox {
+     background-color: var(--tm-bg) !important;
+     color: var(--tm-fg) !important;
+   }
+   ```
+
+   After a theme is applied, the generated file's header contains the exact
+   import URL for your machine, including URL escaping where needed.
+4. Fully quit and restart Firefox. Repeat the restart after each theme switch;
+   Firefox does not hot-reload chrome CSS.
+
+Available variables: `--tm-deep`, `--tm-bg`, `--tm-surface`, `--tm-raised`,
+`--tm-hover`, `--tm-border`, `--tm-fg`, `--tm-dim`, `--tm-accent`,
+`--tm-on-accent`, and `--tm-radius`. Importing them alone does not change the UI;
+your rules must consume them. Firefox UI selectors may change between versions.
+Sandboxed Firefox packages may need additional file-access permissions to read
+the generated palette outside the profile.
 
 ### swaync
 

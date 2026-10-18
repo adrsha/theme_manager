@@ -640,7 +640,7 @@ mod tests {
     #[test]
     fn every_writer_emits_a_manager_owned_file_with_import_tutorial() {
         use crate::writers::{
-            EnvSh, EnvSystemd, FishConf, Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings,
+            EnvSh, EnvSystemd, FirefoxCss, FishConf, Gtk3Css, Gtk4Css, Gtk4Settings, GtkSettings,
             HyprEnv, Hyprland, Kitty, Mango, NvimPatch, Qt6ct, Zathura,
         };
 
@@ -681,6 +681,7 @@ mod tests {
             name: "test".into(),
         };
         let outputs: Vec<(&str, String, &str)> = vec![
+            ("firefox", FirefoxCss.generate(&t).unwrap(), "@import"),
             ("ghostty", Ghostty.generate(&t).unwrap(), "config-file"),
             ("hyprland", Hyprland.generate(&t).unwrap(), "require"),
             ("mango", Mango.generate(&t).unwrap(), "source_optional"),
