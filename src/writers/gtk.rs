@@ -1,5 +1,3 @@
-//! Darkly GTK 3/4 widget coverage, recolored from theme-manager palettes.
-//! Original Darkly GTK CSS: https://github.com/wrymt/darkly-gtk (LGPL-2.1-or-later).
 use crate::{hex_to_rgb, Theme, ThemeError, Writer};
 use std::path::PathBuf;
 
@@ -26,6 +24,8 @@ impl Writer for Gtk4Css {
     }
     fn reload(&self) { install_assets("gtk-4.0"); }
 }
+
+
 
 fn install_assets(version: &str) {
     let target = crate::home().join(".local/share/themes/ThemeManager").join(version).join("theme-manager-assets");
@@ -241,7 +241,7 @@ popover > contents { padding: 8px; }
     let radius = theme.vars.get("CORNER_RADIUS").and_then(|v| v.parse::<u8>().ok()).unwrap_or(12).min(64);
     result.push_str(&body);
     result.push_str(spacing);
-    result.push_str(&format!("\n/* Theme-manager geometry and selection overrides. */\nwindow,dialog,popover,menu {{border-radius:{radius}px}}\nselection,entry selection,textview text selection {{background-color:{accent};color:{accent_fg}}}\n"));
+    // result.push_str(&format!("\n/* Theme-manager geometry and selection overrides. */\nwindow,dialog,popover,menu {{border-radius:{radius}px}}\nselection,entry selection,textview text selection {{background-color:{accent};color:{accent_fg}}}\n"));
     Ok(result)
 }
 
