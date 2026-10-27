@@ -11,10 +11,27 @@ const MIN_ACCENT_SATURATION: f32 = 0.18;
 // Second pass for muted wallpapers that have a tint but no saturated colors.
 const RELAXED_ACCENT_SATURATION: f32 = 0.05;
 const MIN_HUE_GAP: f32 = 25.0;
-const MAX_WALLPAPER_HUES: usize = 4;
+const MAX_WALLPAPER_HUES: usize = 6;
+// A hue only counts when at least this share of the wallpaper's pixels carries
+// it, so a few stray pixels never become an accent.
+const MIN_HUE_SHARE: f32 = 0.01;
+// Pixels within this many degrees of a hue peak belong to that hue.
+const HUE_MERGE_RADIUS: f32 = 15.0;
+// Hue peaks are searched at this many evenly spaced angles.
+const HUE_PEAK_STEPS: usize = 36;
+// Hue is noise in near-black and near-white pixels, so they never vote.
+const MIN_HUE_LIGHTNESS: f32 = 0.08;
+const MAX_HUE_LIGHTNESS: f32 = 0.95;
 const HUE_STEP: f32 = 12.0;
 const LIGHTNESS_STEP: f32 = 0.05;
-const LIGHTNESS_RANGE: f32 = 0.15;
+// Accent lightness range per variant. A hue's own brightness in the wallpaper
+// picks the spot inside it; the low ends keep MIN_ACCENT_CONTRAST on a normal
+// background. Wallpaper lightness at or below DULL (or at or above BRIGHT)
+// selects the bottom (or top) of the range.
+const DARK_ACCENT_LIGHTNESS: (f32, f32) = (0.56, 0.76);
+const LIGHT_ACCENT_LIGHTNESS: (f32, f32) = (0.28, 0.44);
+const HUE_DULL_LIGHTNESS: f32 = 0.20;
+const HUE_BRIGHT_LIGHTNESS: f32 = 0.70;
 // Wallpaper brightness (0..=1) assumed when it can't be measured: no softening.
 const NEUTRAL_BRIGHTNESS: f32 = 0.5;
 // Largest share of a foreground color replaced by the background, reached on a
@@ -561,7 +578,11 @@ fn palette_from_matugen_json(
     let fallback = [rgb_to_hsl(role("primary")?)];
     let hues = if hues.is_empty() { &fallback[..] } else { hues };
     let accents: Vec<Rgb> = (0..9)
-        .map(|i| soften(accent_from_hues(hues, i, dark), MIN_ACCENT_CONTRAST))
+        .map(|i| {
+            let accent = accent_from_hues(hues, i, dark);
+            let readable = lift_to_contrast(accent, background, dark, MIN_ACCENT_CONTRAST);
+            soften(readable, MIN_ACCENT_CONTRAST)
+        })
         .collect();
 
     let red = accents[0];
@@ -661,6 +682,26 @@ fn soften_toward(color: Rgb, background: Rgb, amount: f32, min_contrast: f32) ->
         .unwrap_or(color)
 }
 
+/// Move `color` away from `background` (lighter on dark, darker on light) in
+/// small lightness steps until it reaches `min_contrast`. Unchanged when it
+/// already does; if even the largest shift is not enough, returns that largest
+/// shift (the closest it can get).
+fn lift_to_contrast(color: Rgb, background: Rgb, dark: bool, min_contrast: f32) -> Rgb {
+    const STEP: f32 = 0.02;
+    const MAX_STEPS: usize = 25;
+    let hsl = rgb_to_hsl(color);
+    let direction = if dark { 1.0 } else { -1.0 };
+    let mut best = color;
+    for i in 0..=MAX_STEPS {
+        let lightness = (hsl.2 + direction * STEP * i as f32).clamp(0.0, 1.0);
+        best = if i == 0 { color } else { hsl_to_rgb(Hsl(hsl.0, hsl.1, lightness)) };
+        if contrast_ratio(best, background) >= min_contrast {
+            break;
+        }
+    }
+    best
+}
+
 /// WCAG contrast ratio between two colors (1.0 to 21.0).
 fn contrast_ratio(a: Rgb, b: Rgb) -> f32 {
     let (a, b) = (luminance(a), luminance(b));
@@ -679,19 +720,29 @@ fn luminance(Rgb(r, g, b): Rgb) -> f32 {
     0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
 }
 
-/// Distinct hues of the wallpaper, most dominant first. Prefers saturated
-/// colors; a muted wallpaper retries with a lower saturation floor so its
-/// faint tint is still used. Empty only for (near-)grayscale wallpapers.
+/// Distinct hues of the wallpaper, most dominant first. Each entry carries the
+/// hue's average saturation and its average lightness (`.2`), i.e. how bright
+/// that part of the wallpaper actually is.
+///
+/// Hues are counted straight from the pixels, not from the most common exact
+/// colors: shading splits one large hue into many near-identical colors, which
+/// would crowd out every smaller hue. Prefers saturated pixels; a muted
+/// wallpaper retries with a lower saturation floor so its faint tint is still
+/// used. Empty only for (near-)grayscale wallpapers.
 fn wallpaper_hues(pixels: &[Rgb]) -> Vec<Hsl> {
-    let candidates: Vec<Hsl> = dominant_colors(pixels).into_iter().map(rgb_to_hsl).collect();
+    if pixels.is_empty() {
+        return Vec::new();
+    }
+    let all: Vec<Hsl> = pixels.iter().map(|&pixel| rgb_to_hsl(pixel)).collect();
     for min_saturation in [MIN_ACCENT_SATURATION, RELAXED_ACCENT_SATURATION] {
-        let mut hues: Vec<Hsl> = Vec::new();
-        for hsl in candidates.iter().filter(|c| c.1 >= min_saturation) {
-            let distinct = hues.iter().all(|h| hue_distance(h.0, hsl.0) >= MIN_HUE_GAP);
-            if distinct && hues.len() < MAX_WALLPAPER_HUES {
-                hues.push(*hsl);
-            }
-        }
+        let voters: Vec<Hsl> = all
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.1 >= min_saturation && (MIN_HUE_LIGHTNESS..=MAX_HUE_LIGHTNESS).contains(&c.2)
+            })
+            .collect();
+        let hues = pick_hues(voters, pixels.len());
         if !hues.is_empty() {
             return hues;
         }
@@ -699,9 +750,67 @@ fn wallpaper_hues(pixels: &[Rgb]) -> Vec<Hsl> {
     Vec::new()
 }
 
+/// Repeatedly take the heaviest hue, then drop everything within
+/// `MIN_HUE_GAP` of it so the next hue is clearly different.
+fn pick_hues(mut remaining: Vec<Hsl>, total_pixels: usize) -> Vec<Hsl> {
+    let mut hues = Vec::new();
+    while hues.len() < MAX_WALLPAPER_HUES {
+        let Some(peak) = heaviest_hue(&remaining) else {
+            break;
+        };
+        let members: Vec<Hsl> = remaining
+            .iter()
+            .copied()
+            .filter(|c| hue_distance(c.0, peak) <= HUE_MERGE_RADIUS)
+            .collect();
+        if members.is_empty() || (members.len() as f32) < MIN_HUE_SHARE * total_pixels as f32 {
+            break;
+        }
+        hues.push(mean_hsl(&members));
+        remaining.retain(|c| hue_distance(c.0, peak) > MIN_HUE_GAP);
+    }
+    hues
+}
+
+/// Hue angle (degrees) with the most saturation-weighted pixels around it.
+fn heaviest_hue(colors: &[Hsl]) -> Option<f32> {
+    (0..HUE_PEAK_STEPS)
+        .map(|step| step as f32 * 360.0 / HUE_PEAK_STEPS as f32)
+        .map(|angle| {
+            let weight: f32 = colors
+                .iter()
+                .filter(|c| hue_distance(c.0, angle) <= HUE_MERGE_RADIUS)
+                .map(|c| c.1)
+                .sum();
+            (angle, weight)
+        })
+        .filter(|&(_, weight)| weight > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(angle, _)| angle)
+}
+
+/// Average color of `colors`; hue is averaged as an angle so 350° and 10° give
+/// 0°, not 180°. Returns mid-gray for an empty slice.
+fn mean_hsl(colors: &[Hsl]) -> Hsl {
+    if colors.is_empty() {
+        return Hsl(0.0, 0.0, 0.5);
+    }
+    let count = colors.len() as f32;
+    let (sin, cos) = colors.iter().fold((0.0f32, 0.0f32), |(sin, cos), c| {
+        let radians = c.0.to_radians();
+        (sin + radians.sin(), cos + radians.cos())
+    });
+    Hsl(
+        sin.atan2(cos).to_degrees().rem_euclid(360.0),
+        colors.iter().map(|c| c.1).sum::<f32>() / count,
+        colors.iter().map(|c| c.2).sum::<f32>() / count,
+    )
+}
+
 /// Accent `index`: slots cycle through `hues` (non-empty). Each repeat nudges
 /// hue and lightness slightly, so a wallpaper with few colors still gets
-/// distinct accents that stay close to its own hues.
+/// distinct accents that stay close to its own hues. A hue that is bright in
+/// the wallpaper gets a bright accent; a dull one gets a dull accent.
 fn accent_from_hues(hues: &[Hsl], index: usize, dark: bool) -> Rgb {
     let base = hues[index % hues.len()];
     let round = index / hues.len();
@@ -709,13 +818,18 @@ fn accent_from_hues(hues: &[Hsl], index: usize, dark: bool) -> Rgb {
     let magnitude = ((round + 1) / 2) as f32;
     let step = if round % 2 == 1 { magnitude } else { -magnitude };
 
-    let center = if dark { 0.64 } else { 0.42 };
-    let lightness = (center + step * LIGHTNESS_STEP)
-        .clamp(center - LIGHTNESS_RANGE, center + LIGHTNESS_RANGE);
+    let (low, high) = if dark {
+        DARK_ACCENT_LIGHTNESS
+    } else {
+        LIGHT_ACCENT_LIGHTNESS
+    };
+    let brightness = ((base.2 - HUE_DULL_LIGHTNESS) / (HUE_BRIGHT_LIGHTNESS - HUE_DULL_LIGHTNESS))
+        .clamp(0.0, 1.0);
+    let center = low + brightness * (high - low);
     hsl_to_rgb(Hsl(
         (base.0 + step * HUE_STEP).rem_euclid(360.0),
         base.1.clamp(0.25, 0.82),
-        lightness,
+        (center + step * LIGHTNESS_STEP).clamp(low, high),
     ))
 }
 
@@ -848,7 +962,7 @@ mod tests {
         generate_palette, hue_distance, normalize_matugen_scheme, palette_from_matugen_json,
         parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
         contrast_ratio, retain_current_palette, rgb_to_hsl, wallpaper_brightness, wallpaper_hues,
-        Rgb, MIN_ACCENT_CONTRAST, MIN_TEXT_CONTRAST, NEUTRAL_BRIGHTNESS,
+        accent_from_hues, hsl_to_rgb, mean_hsl, Hsl, Rgb, MIN_ACCENT_CONTRAST, MIN_TEXT_CONTRAST, NEUTRAL_BRIGHTNESS,
     };
     use crate::Theme;
     use std::collections::HashMap;
@@ -1278,5 +1392,95 @@ mod tests {
         // And clearly dimmer than on a normal wallpaper.
         let normal = palette_at("dark", 0.5);
         assert!(lightness_of(&palette, "BASE07") + 0.15 < lightness_of(&normal, "BASE07"));
+    }
+
+    fn hsl_pixels(hue: f32, saturation: f32, lightness: f32, count: usize) -> Vec<Rgb> {
+        vec![hsl_to_rgb(Hsl(hue, saturation, lightness)); count]
+    }
+
+    #[test]
+    fn small_hue_is_not_crowded_out_by_a_heavily_shaded_hue() {
+        // A heavily shaded blue area (48 distinct colors) plus a ~6% red patch
+        // that is itself spread over a few shades.
+        let mut pixels: Vec<Rgb> = (0..6)
+            .flat_map(|s| (0..8).map(move |l| (s, l)))
+            .flat_map(|(s, l)| {
+                hsl_pixels(230.0, 0.3 + s as f32 * 0.1, 0.15 + l as f32 * 0.065, 120)
+            })
+            .collect();
+        for shade in 0..12 {
+            pixels.extend(hsl_pixels(350.0, 0.6, 0.25 + shade as f32 * 0.018, 30));
+        }
+        let hues = wallpaper_hues(&pixels);
+        assert!(hues.iter().any(|h| hue_distance(h.0, 350.0) <= 15.0), "{hues:?}");
+        assert!(hues.iter().any(|h| hue_distance(h.0, 230.0) <= 15.0), "{hues:?}");
+    }
+
+    #[test]
+    fn stray_pixels_do_not_become_a_hue() {
+        let mut pixels = hsl_pixels(230.0, 0.5, 0.3, 1000);
+        pixels.extend(hsl_pixels(350.0, 0.8, 0.5, 3));
+        let hues = wallpaper_hues(&pixels);
+        assert_eq!(hues.len(), 1, "{hues:?}");
+    }
+
+    #[test]
+    fn hue_average_wraps_around_red() {
+        let mean = mean_hsl(&[Hsl(350.0, 0.5, 0.4), Hsl(10.0, 0.5, 0.4)]);
+        assert!(hue_distance(mean.0, 0.0) < 1.0, "{mean:?}");
+        let empty = mean_hsl(&[]);
+        assert_eq!((empty.1, empty.2), (0.0, 0.5));
+    }
+
+    #[test]
+    fn near_black_and_near_white_pixels_do_not_vote() {
+        let mut pixels = hsl_pixels(10.0, 0.9, 0.02, 500);
+        pixels.extend(hsl_pixels(100.0, 0.9, 0.99, 500));
+        assert!(wallpaper_hues(&pixels).is_empty());
+    }
+
+    #[test]
+    fn bright_hue_gets_a_brighter_accent_than_a_dull_hue() {
+        for dark in [true, false] {
+            let lightness = |hue: Hsl| {
+                let hsl = rgb_to_hsl(accent_from_hues(&[hue], 0, dark));
+                hsl.2
+            };
+            let bright = lightness(Hsl(60.0, 0.6, 0.7));
+            let dull = lightness(Hsl(60.0, 0.6, 0.15));
+            assert!(bright > dull + 0.1, "dark={dark}: bright {bright}, dull {dull}");
+        }
+    }
+
+    #[test]
+    fn every_accent_stays_readable_even_for_dull_blue_and_violet_walls() {
+        let json = matugen_json("#95cdf7", "#256489");
+        for variant in ["dark", "light"] {
+            for hue in [0.0, 60.0, 120.0, 240.0, 270.0, 330.0] {
+                for lightness in [0.10, 0.45, 0.80] {
+                    let pixels = hsl_pixels(hue, 0.7, lightness, 200);
+                    let palette = palette_from_matugen_json(
+                        &json,
+                        variant,
+                        &wallpaper_hues(&pixels),
+                        NEUTRAL_BRIGHTNESS,
+                    )
+                    .unwrap();
+                    let rgb = |key: &str| {
+                        let hex = &palette[key];
+                        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+                        Rgb(channel(1), channel(3), channel(5))
+                    };
+                    let background = rgb("BASE00");
+                    for key in ACCENT_KEYS {
+                        let ratio = contrast_ratio(rgb(key), background);
+                        assert!(
+                            ratio >= MIN_ACCENT_CONTRAST,
+                            "{variant} hue {hue} l {lightness} {key}: {ratio:.2}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
