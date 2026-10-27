@@ -28,8 +28,7 @@ Runtime helpers, all optional at build time and looked up on `PATH`:
 
 | Helper | Used for |
 |---|---|
-| `matugen` | `MATUGEN_SCHEME` Material 3 palettes |
-| `ffmpeg` | fallback palette extraction and video frames |
+| `ffmpeg` | palette extraction and video frames |
 | `awww` | still-image wallpapers |
 | `mpvpaper` | video wallpapers |
 | `procps` (`pgrep`/`pkill`) | wallpaper process detection and cleanup |
@@ -97,11 +96,6 @@ MODE=dynamic
 # Wallpaper (required by MODE=dynamic; otherwise optional)
 WALLPAPER=/home/you/walls/my_wallpaper.png
 
-# Optional Material 3 scheme for MODE=dynamic. Accepted values match matugen:
-# content, expressive, fidelity, fruit-salad, monochrome, neutral, rainbow,
-# tonal-spot, vibrant, smart. The `scheme-` prefix is also accepted.
-MATUGEN_SCHEME=tonal-spot
-
 # Base16 colors
 BASE00=#1a1b26
 BASE01=#16161e
@@ -168,35 +162,40 @@ wallpaper active immediately before the theme switch. The resolved absolute
 path is then carried through to the generated environment and wallpaper
 manager.
 
-Set `MATUGEN_SCHEME` to let [matugen](https://github.com/InioX/matugen) generate
-a Material 3 palette. The value is passed to `matugen image --type`; both
-`tonal-spot` and `scheme-tonal-spot` spellings work. Material supplies the
-neutral surfaces and the primary/secondary/tertiary/error roles; the remaining
-semantic accents are derived from the scheme's own saturation and lightness, so
-`expressive`, `rainbow`, `vibrant`, and `monochrome` produce visibly different
-palettes. NvChad/base46 keys that Material does not define (`GREY_FG`, `LINE`,
-`VIBRANT_GREEN`, `NORD_BLUE`, `SUN`, `DARK_PURPLE`, `ORANGE`, `STATUSLINE_BG`,
-`LIGHTBG`, `PMENU_BG`, `FOLDER_BG`) are derived from the generated palette too,
-so chadrc never falls back to its built-in onedark theme. Individual color keys
-still override generated values.
+FFmpeg decodes a representative frame from JPEG, PNG, GIF, animated WebP, or a
+supported video, and the whole palette is generated from it, with no external
+palette tool:
 
-Without `MATUGEN_SCHEME`, the manager falls back to its FFmpeg-based extractor:
-it decodes a representative frame from JPEG, PNG, GIF, animated WebP, or a
-supported video, analyzes its dominant colors, and creates variant-appropriate
-backgrounds, foregrounds, and semantic accents. In either mode a valid
-wallpaper is required; an extraction error stops the switch instead of applying
-a partially generated theme.
+- **Backgrounds** carry the wallpaper's dominant tint, at a fixed dark or light
+  lightness.
+- **Accents** (`BASE08`-`BASE0F`, `TEAL`) are the wallpaper's own hues, found
+  from the pixels (up to eight, each covering at least 1% of the image, so a
+  small red patch is not lost behind a large shaded area). Each hue goes to the
+  slot it is closest to: a crimson lands in `BASE08`/`RED`, a blue in
+  `BASE0D`/`BLUE`, and so on.
+- Accents keep the wallpaper's own **saturation and brightness**: a muted
+  wallpaper gives muted accents, a vivid one vivid accents. Colorful pixels
+  count more than dull ones within a hue, so a small bright area is not
+  averaged away. The only adjustment is a lift (lighter on dark, darker on
+  light) just large enough to reach a 4.5:1 contrast against the background.
+- A slot no wallpaper hue is close to takes the nearest found hue and moves it
+  part of the way (at most about 50 degrees) toward the slot's own hue, with a
+  small lightness step, so every accent stays near a hue the wallpaper has.
+  A grayscale wallpaper falls back to a soft blue.
+- **Text** is matched to brightness too: on a wallpaper darker than mid-gray
+  (dark variant) or brighter than mid-gray (light variant), body text and the
+  secondary/comment gray (`BASE04`, `GREY_FG`) are pulled toward the background,
+  never below 7:1 (body) and 4.5:1 (secondary). Mid-gray and opposite-side
+  wallpapers are unchanged.
+- NvChad/base46 keys that Base16 does not define (`GREY_FG`, `LINE`,
+  `VIBRANT_GREEN`, `NORD_BLUE`, `SUN`, `DARK_PURPLE`, `ORANGE`, `STATUSLINE_BG`,
+  `LIGHTBG`, `PMENU_BG`, `FOLDER_BG`) are derived from the generated palette,
+  so chadrc never falls back to its built-in onedark theme.
 
-With `MATUGEN_SCHEME` set, backgrounds and foregrounds still come from matugen,
-but every accent (`BASE08`-`BASE0F`, `TEAL`) is built from up to four distinct
-hues found in the wallpaper. A wallpaper with few colors reuses those hues with
-small hue/lightness variations instead of introducing hues it doesn't contain.
-A grayscale wallpaper falls back to matugen's primary hue.
-Brightness is matched too: on a wallpaper darker than mid-gray (dark variant)
-or brighter than mid-gray (light variant), accents, text and especially the
-secondary/comment gray (`BASE04`, `GREY_FG`) are pulled toward the background,
-by up to 40% for the secondary gray at the extreme. Mid-gray and opposite-side
-wallpapers are unchanged.
+Individual color keys still override generated values. A valid wallpaper is
+required; an extraction error stops the switch instead of applying a partially
+generated theme. `MATUGEN_SCHEME` is no longer used; theme files that still
+contain it keep working and a warning is logged.
 
 ## Usage
 
