@@ -26,6 +26,21 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
         return Ok(());
     }
 
+    // WALLPAPER=none is an explicit request to clear the backdrop. Keep the
+    // last resolved colors (there is no image to sample), but never replace
+    // the value with `current_wallpaper()`: that would undo the removal and
+    // repaint the old image.
+    let explicit_none = theme.vars.get("WALLPAPER").is_some_and(|value| {
+        let value = value.trim();
+        value.is_empty() || value.eq_ignore_ascii_case("none")
+    });
+    if explicit_none {
+        let content = fs::read_to_string(env_sh_file()).unwrap_or_default();
+        retain_current_palette(theme, &content)?;
+        theme.vars.insert("WALLPAPER".into(), "none".into());
+        return Ok(());
+    }
+
     // A stale wallpaper must not prevent selecting a dynamic theme. Retain
     // the last published palette and wallpaper until a new source is assigned.
     let wallpaper = match resolve_wallpaper(theme) {
@@ -890,6 +905,24 @@ mod tests {
         assert!(theme.vars.contains_key("BASE00"));
         assert!(theme.vars.contains_key("BASE0F"));
     }
+    #[test]
+    fn explicit_none_wallpaper_clears_without_restoring_the_previous_one() {
+        for value in ["none", "NONE", ""] {
+            let mut theme = Theme {
+                name: "cleared-wallpaper".to_string(),
+                path: "cleared-wallpaper".into(),
+                vars: HashMap::from([
+                    ("VARIANT".to_string(), "dark".to_string()),
+                    ("MODE".to_string(), "dynamic".to_string()),
+                    ("WALLPAPER".to_string(), value.to_string()),
+                ]),
+            };
+            resolve_dynamic_palette(&mut theme).unwrap();
+            assert_eq!(theme.vars["WALLPAPER"], "none");
+            assert!(theme.vars.contains_key("BASE00"));
+        }
+    }
+
     #[test]
     fn missing_wallpaper_retains_published_colors_not_new_overrides() {
         let mut theme = Theme {
