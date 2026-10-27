@@ -173,11 +173,16 @@ palette tool:
   small red patch is not lost behind a large shaded area). Each hue goes to the
   slot it is closest to: a crimson lands in `BASE08`/`RED`, a blue in
   `BASE0D`/`BLUE`, and so on.
-- Accents keep the wallpaper's own **saturation and brightness**: a muted
-  wallpaper gives muted accents, a vivid one vivid accents. Colorful pixels
-  count more than dull ones within a hue, so a small bright area is not
-  averaged away. The only adjustment is a lift (lighter on dark, darker on
-  light) just large enough to reach a 4.5:1 contrast against the background.
+- Accents keep the wallpaper's own **brightness and colorfulness**, measured as
+  OKLCH chroma, which looks the same at any lightness (HSL saturation does not:
+  it rates near-black teal as 0.2 and pastel peach as 1.0). A muted wallpaper
+  gives muted accents, a vivid one vivid accents. Colorful pixels count more
+  than dull ones within a hue, so a small bright area is not averaged away.
+  Saturation is then balanced across the whole palette: all accents are scaled
+  together (by at most 0.7x to 1.5x) so their average chroma matches how
+  colorful the wallpaper's colorful areas are. A lift (lighter on dark, darker
+  on light) just large enough to reach 4.5:1 contrast against the background is
+  the only other adjustment.
 - A slot no wallpaper hue is close to takes the nearest found hue and moves it
   part of the way (at most about 50 degrees) toward the slot's own hue, with a
   small lightness step, so every accent stays near a hue the wallpaper has.

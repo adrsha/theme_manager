@@ -36,11 +36,18 @@ const SLOT_HUES: [f32; 9] = [5.0, 30.0, 52.0, 125.0, 190.0, 220.0, 280.0, 330.0,
 // their lightness by LIGHTNESS_STEP.
 const SLOT_PULL: f32 = 0.28;
 const LIGHTNESS_STEP: f32 = 0.05;
-// Accents keep the wallpaper's own saturation and lightness, within these
-// limits, and are then lifted only as far as needed for MIN_ACCENT_CONTRAST.
-const ACCENT_SATURATION: (f32, f32) = (0.25, 0.85);
-const DARK_ACCENT_LIGHTNESS: (f32, f32) = (0.40, 0.80);
-const LIGHT_ACCENT_LIGHTNESS: (f32, f32) = (0.30, 0.55);
+// Accents keep the wallpaper's own hue and its colorfulness (OKLCH chroma, which
+// looks the same at any lightness), so a vivid wallpaper gives vivid accents
+// and a muted one muted accents. Their lightness (OKLab L) follows the
+// wallpaper within these limits, and they are lifted only as far as needed for
+// MIN_ACCENT_CONTRAST. MIN_ACCENT_CHROMA keeps a faint hue visible.
+const MIN_ACCENT_CHROMA: f32 = 0.03;
+// After each accent keeps its own chroma, all accents are scaled together so
+// the palette is as colorful overall as the wallpaper's colorful areas are
+// (see `chroma_gain`), within these limits.
+const CHROMA_GAIN: (f32, f32) = (0.7, 1.5);
+const DARK_ACCENT_LIGHTNESS: (f32, f32) = (0.62, 0.86);
+const LIGHT_ACCENT_LIGHTNESS: (f32, f32) = (0.30, 0.52);
 // Used when the wallpaper has no usable hue (grayscale).
 const FALLBACK_HUE: Hsl = Hsl(225.0, 0.45, 0.60);
 
@@ -339,8 +346,9 @@ fn generate_palette(pixels: &[Rgb], variant: &str) -> Result<HashMap<String, Str
     let base06 = mix(base05, text_tint, 0.10);
     let base07 = mix(base05, text_tint, 0.20);
 
-    let accents = assign_accent_slots(&wallpaper_hues(pixels))
-        .map(|(wall, tweak)| accent_color(wall, tweak, base00, dark));
+    let slots = assign_accent_slots(&wallpaper_hues(pixels));
+    let gain = chroma_gain(pixels, &slots);
+    let accents = slots.map(|(wall, tweak)| accent_color(wall, tweak, gain, base00, dark));
     let [red, orange, yellow, green, cyan, blue, purple, pink, teal] = accents;
     let baby_pink = mix(pink, base07, 0.35);
 
@@ -480,31 +488,66 @@ fn toward_slot(source: Hsl, slot_hue: f32, round: usize) -> (Hsl, f32) {
 }
 
 /// The wallpaper color as an accent: its hue, its brightness within sane limits
-/// (plus `tweak`), and a saturation midway between the color's relative
-/// saturation and its absolute chroma. HSL saturation alone overstates very
-/// dark and very light colors (a near-black teal reads as 0.2, a pastel peach
-/// as 1.0); the midpoint keeps vivid colors vivid without turning those into
-/// loud ones. The result is lifted (lighter on dark, darker on light) only as
-/// far as needed to stay readable on `background`.
-fn accent_color(wall: Hsl, tweak: f32, background: Rgb, dark: bool) -> Rgb {
+/// (plus `tweak`, in OKLab lightness), and its colorfulness times `gain`
+/// (see `chroma_gain`). Colorfulness is
+/// carried over as OKLCH chroma, which looks the same at any lightness. HSL
+/// saturation cannot be: it rates a near-black teal as 0.2 and a pastel peach
+/// as 1.0, so lightening or darkening a color at constant saturation turns
+/// pastels loud and flattens deep neons. Chroma is capped at what sRGB can show
+/// at the accent's lightness. The result is lifted (lighter on dark, darker on
+/// light) only as far as needed to stay readable on `background`.
+fn accent_color(wall: Hsl, tweak: f32, gain: f32, background: Rgb, dark: bool) -> Rgb {
     let (min_lightness, max_lightness) = if dark {
         DARK_ACCENT_LIGHTNESS
     } else {
         LIGHT_ACCENT_LIGHTNESS
     };
-    let wall_chroma = chroma(&wall);
-    let lightness = (wall.2.clamp(min_lightness, max_lightness) + tweak).clamp(0.0, 1.0);
-    let room = 1.0 - (2.0 * lightness - 1.0).abs();
-    let kept = if room > f32::EPSILON {
-        (wall_chroma / room).clamp(0.0, 1.0)
-    } else {
-        wall.1
-    };
-    let saturation = (wall.1 * kept)
-        .sqrt()
-        .clamp(ACCENT_SATURATION.0, ACCENT_SATURATION.1);
-    let color = hsl_to_rgb(Hsl(wall.0, saturation, lightness));
+    let source = rgb_to_oklch(hsl_to_rgb(wall));
+    let lightness = (source.0.clamp(min_lightness, max_lightness) + tweak).clamp(0.0, 1.0);
+    let chroma = (source.1 * gain)
+        .max(MIN_ACCENT_CHROMA)
+        .min(max_chroma(lightness, source.2));
+    let color = oklch_to_rgb(lightness, chroma, source.2);
     lift_to_contrast(color, background, dark, MIN_ACCENT_CONTRAST)
+}
+
+/// How colorful the wallpaper's colorful areas are: the mean OKLCH chroma of
+/// pixels that have any color, with the most colorful pixels counting most (so
+/// a vivid neon is not averaged away by dull surroundings). 0 when no pixel has
+/// color.
+fn wallpaper_vividness(pixels: &[Rgb]) -> f32 {
+    let (mut weighted, mut weights) = (0.0f32, 0.0f32);
+    for &pixel in pixels {
+        let chroma = rgb_to_oklch(pixel).1;
+        if chroma >= MIN_ACCENT_CHROMA {
+            weighted += chroma * chroma * chroma;
+            weights += chroma * chroma;
+        }
+    }
+    if weights > 0.0 {
+        weighted / weights
+    } else {
+        0.0
+    }
+}
+
+/// One factor applied to every accent's chroma so that the palette is as
+/// colorful overall as the wallpaper. Each accent already carries its own
+/// hue's chroma, but averaging over all slots treats a dull hue like the
+/// wallpaper's dark teal as much as its neon red, which leaves the palette
+/// duller than the wallpaper looks. 1 when the wallpaper has no color to match;
+/// otherwise limited to `CHROMA_GAIN` so one odd wallpaper cannot swing it.
+fn chroma_gain(pixels: &[Rgb], slots: &[(Hsl, f32)]) -> f32 {
+    let target = wallpaper_vividness(pixels);
+    if slots.is_empty() || target <= 0.0 {
+        return 1.0;
+    }
+    let mean = slots
+        .iter()
+        .map(|(wall, _)| rgb_to_oklch(hsl_to_rgb(*wall)).1.max(MIN_ACCENT_CHROMA))
+        .sum::<f32>()
+        / slots.len() as f32;
+    (target / mean).clamp(CHROMA_GAIN.0, CHROMA_GAIN.1)
 }
 
 /// Distinct hues of the wallpaper, most dominant first. Each entry is the
@@ -813,10 +856,89 @@ fn hsl_to_rgb(Hsl(h, s, l): Hsl) -> Rgb {
     Rgb(channel(r), channel(g), channel(b))
 }
 
+/// OKLCH (lightness 0..1, chroma, hue in degrees): a perceptual color space in
+/// which equal chroma looks equally colorful at any lightness and hue.
+#[derive(Clone, Copy, Debug)]
+struct Oklch(f32, f32, f32);
+
+fn srgb_to_linear(channel: u8) -> f32 {
+    let c = channel as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f32) -> u8 {
+    let v = value.clamp(0.0, 1.0);
+    let encoded = if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round() as u8
+}
+
+fn rgb_to_oklch(Rgb(r, g, b): Rgb) -> Oklch {
+    let (r, g, b) = (srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
+    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    let lightness = 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s;
+    let a = 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s;
+    let b = 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s;
+    Oklch(lightness, a.hypot(b), b.atan2(a).to_degrees().rem_euclid(360.0))
+}
+
+/// Linear-light sRGB for an OKLCH color; channels may fall outside 0..=1 when
+/// the color is outside the sRGB gamut.
+fn oklch_to_linear(lightness: f32, chroma: f32, hue: f32) -> [f32; 3] {
+    let (sin, cos) = hue.to_radians().sin_cos();
+    let (a, b) = (chroma * cos, chroma * sin);
+    let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+    [
+        4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+        -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s,
+        -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+    ]
+}
+
+/// The color, clamped into the sRGB gamut channel by channel.
+fn oklch_to_rgb(lightness: f32, chroma: f32, hue: f32) -> Rgb {
+    let [r, g, b] = oklch_to_linear(lightness, chroma, hue);
+    Rgb(linear_to_srgb(r), linear_to_srgb(g), linear_to_srgb(b))
+}
+
+/// Largest chroma that still fits in sRGB at this lightness and hue (0 for
+/// pure black and white, where no color fits).
+fn max_chroma(lightness: f32, hue: f32) -> f32 {
+    if !(0.0..1.0).contains(&lightness) || lightness <= 0.0 {
+        return 0.0;
+    }
+    let fits = |chroma: f32| {
+        oklch_to_linear(lightness, chroma, hue)
+            .iter()
+            .all(|channel| (-0.000_5..=1.000_5).contains(channel))
+    };
+    let (mut low, mut high) = (0.0f32, 0.4f32);
+    for _ in 0..24 {
+        let middle = (low + high) / 2.0;
+        if fits(middle) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    low
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        accent_color, contrast_ratio, generate_palette, hsl_to_rgb, hue_distance, mean_hsl,
+        accent_color, chroma_gain, assign_accent_slots, contrast_ratio, wallpaper_vividness, generate_palette, hsl_to_rgb, hue_distance, mean_hsl,
         parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
         retain_current_palette, rgb_to_hsl, wallpaper_brightness, wallpaper_hues, Hsl, Rgb,
         FALLBACK_HUE, MIN_ACCENT_CONTRAST, MIN_TEXT_CONTRAST, NEUTRAL_BRIGHTNESS,
@@ -1232,9 +1354,34 @@ mod tests {
     }
 
     #[test]
+    fn accents_are_made_as_colorful_as_the_wallpapers_colorful_areas() {
+        // A vivid red patch among a large dull teal area: the average over hues
+        // is duller than the red, so the gain must raise the accents.
+        let mut pixels = hsl_pixels(190.0, 0.3, 0.3, 800);
+        pixels.extend(hsl_pixels(5.0, 0.85, 0.45, 150));
+        let slots = assign_accent_slots(&wallpaper_hues(&pixels));
+        let gain = chroma_gain(&pixels, &slots);
+        assert!(gain > 1.1 && gain <= 1.5, "{gain}");
+        assert!(wallpaper_vividness(&pixels) > 0.05);
+    }
+
+    #[test]
+    fn chroma_gain_stays_neutral_without_color_and_within_limits() {
+        let gray = gray_wall(100);
+        assert_eq!(wallpaper_vividness(&gray), 0.0);
+        assert_eq!(chroma_gain(&gray, &assign_accent_slots(&[])), 1.0);
+        assert_eq!(chroma_gain(&gray, &[]), 1.0);
+        // One vivid pixel group, many dull derived slots: capped, never runaway.
+        let pixels = hsl_pixels(5.0, 1.0, 0.5, 200);
+        let slots = assign_accent_slots(&wallpaper_hues(&pixels));
+        let gain = chroma_gain(&pixels, &slots);
+        assert!((0.7..=1.5).contains(&gain), "{gain}");
+    }
+
+    #[test]
     fn a_bright_color_gets_a_brighter_accent_than_a_dull_one_in_the_dark_variant() {
         let background = hsl_to_rgb(Hsl(220.0, 0.1, 0.08));
-        let lightness = |wall: Hsl| rgb_to_hsl(accent_color(wall, 0.0, background, true)).2;
+        let lightness = |wall: Hsl| rgb_to_hsl(accent_color(wall, 0.0, 1.0, background, true)).2;
         let bright = lightness(Hsl(60.0, 0.6, 0.7));
         let dull = lightness(Hsl(60.0, 0.6, 0.3));
         assert!(bright > dull + 0.1, "bright {bright}, dull {dull}");
