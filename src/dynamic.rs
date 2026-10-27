@@ -15,6 +15,11 @@ const MAX_WALLPAPER_HUES: usize = 4;
 const HUE_STEP: f32 = 12.0;
 const LIGHTNESS_STEP: f32 = 0.05;
 const LIGHTNESS_RANGE: f32 = 0.15;
+// Wallpaper brightness (0..=1) assumed when it can't be measured: no softening.
+const NEUTRAL_BRIGHTNESS: f32 = 0.5;
+// Largest share of a foreground color replaced by the background, reached on a
+// wallpaper as extreme as the variant itself (pitch black for dark, white for light).
+const MAX_SOFTEN: f32 = 0.4;
 
 /// Material 3 scheme names accepted by `MATUGEN_SCHEME`, matching matugen's
 /// `--type` values. Both `rainbow` and `scheme-rainbow` spellings are accepted.
@@ -76,15 +81,15 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
     let variant = theme.require("VARIANT")?;
     let generated = if let Some(scheme) = theme.vars.get("MATUGEN_SCHEME") {
         let scheme = normalize_matugen_scheme(scheme)?;
-        // Without decodable pixels the accents fall back to matugen's primary hue.
-        let hues = match decode_representative_frame(&wallpaper) {
-            Ok(pixels) => wallpaper_hues(&pixels),
+        // Without decodable pixels: matugen's primary hue and no brightness softening.
+        let (hues, brightness) = match decode_representative_frame(&wallpaper) {
+            Ok(pixels) => (wallpaper_hues(&pixels), wallpaper_brightness(&pixels)),
             Err(error) => {
-                eprintln!("theme-manager: {error}; deriving accents from matugen primary");
-                Vec::new()
+                eprintln!("theme-manager: {error}; using matugen primary, default brightness");
+                (Vec::new(), NEUTRAL_BRIGHTNESS)
             }
         };
-        generate_matugen_palette(&wallpaper, variant, &scheme, &hues)?
+        generate_matugen_palette(&wallpaper, variant, &scheme, &hues, brightness)?
     } else {
         let pixels = decode_representative_frame(&wallpaper)?;
         generate_palette(&pixels, variant)?
@@ -456,6 +461,7 @@ fn generate_matugen_palette(
     variant: &str,
     scheme: &str,
     hues: &[Hsl],
+    brightness: f32,
 ) -> Result<HashMap<String, String>, ThemeError> {
     let output = Command::new("matugen")
         .args(["image"])
@@ -485,7 +491,12 @@ fn generate_matugen_palette(
         )));
     }
 
-    palette_from_matugen_json(&String::from_utf8_lossy(&output.stdout), variant, hues)
+    palette_from_matugen_json(
+        &String::from_utf8_lossy(&output.stdout),
+        variant,
+        hues,
+        brightness,
+    )
 }
 
 /// Read one role from matugen's `colors` object for the requested mode.
@@ -505,10 +516,13 @@ fn matugen_color(json: &str, role: &str, mode: &str) -> Option<Rgb> {
 
 /// Neutrals come from matugen; every accent is built from `hues` (the
 /// wallpaper's own colors), never from fixed hues or Material's red error role.
+/// `brightness` (0..=1, see `wallpaper_brightness`) softens foreground colors
+/// when the wallpaper is dark (dark variant) or bright (light variant).
 fn palette_from_matugen_json(
     json: &str,
     variant: &str,
     hues: &[Hsl],
+    brightness: f32,
 ) -> Result<HashMap<String, String>, ThemeError> {
     let dark = match variant {
         "dark" => true,
@@ -524,8 +538,13 @@ fn palette_from_matugen_json(
     let base01 = role("surface_container_lowest").unwrap_or(background);
     let base02 = role("surface_container_low").unwrap_or(background);
     let base03 = role("surface_container").unwrap_or(background);
-    let base04 = role("on_surface_variant")?;
-    let base05 = role("on_surface")?;
+    // Pull a foreground color toward the background; `weight` scales how much.
+    let softness = softness(brightness, dark);
+    let soften = |color: Rgb, weight: f32| mix(color, background, softness * MAX_SOFTEN * weight);
+
+    // BASE04 is the secondary/comment color, so it is softened the most.
+    let base04 = soften(role("on_surface_variant")?, 1.0);
+    let base05 = soften(role("on_surface")?, 0.3);
     let text_tint = if dark {
         Rgb(255, 255, 255)
     } else {
@@ -536,7 +555,9 @@ fn palette_from_matugen_json(
 
     let fallback = [rgb_to_hsl(role("primary")?)];
     let hues = if hues.is_empty() { &fallback[..] } else { hues };
-    let accents: Vec<Rgb> = (0..9).map(|i| accent_from_hues(hues, i, dark)).collect();
+    let accents: Vec<Rgb> = (0..9)
+        .map(|i| soften(accent_from_hues(hues, i, dark), 0.6))
+        .collect();
 
     let red = accents[0];
     let orange = accents[1];
@@ -603,6 +624,27 @@ fn palette_from_matugen_json(
         orange,
     );
     Ok(palette)
+}
+
+/// Mean perceived brightness of the wallpaper, 0 (black) to 1 (white).
+fn wallpaper_brightness(pixels: &[Rgb]) -> f32 {
+    if pixels.is_empty() {
+        return NEUTRAL_BRIGHTNESS;
+    }
+    let total: f32 = pixels
+        .iter()
+        .map(|&Rgb(r, g, b)| 0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32)
+        .sum();
+    total / (pixels.len() as f32 * 255.0)
+}
+
+/// 0..=1: how far the wallpaper lies past mid-gray toward the variant's own
+/// background (darker for dark, brighter for light). Mid-gray or the opposite
+/// side gives 0, so ordinary wallpapers keep matugen's tones unchanged.
+fn softness(brightness: f32, dark: bool) -> f32 {
+    let brightness = brightness.clamp(0.0, 1.0);
+    let toward_background = if dark { 1.0 - brightness } else { brightness };
+    ((toward_background - 0.5) * 2.0).clamp(0.0, 1.0)
 }
 
 /// Distinct hues of the wallpaper, most dominant first. Prefers saturated
@@ -773,7 +815,8 @@ mod tests {
     use super::{
         generate_palette, hue_distance, normalize_matugen_scheme, palette_from_matugen_json,
         parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
-        retain_current_palette, rgb_to_hsl, wallpaper_hues, Rgb,
+        retain_current_palette, rgb_to_hsl, wallpaper_brightness, wallpaper_hues, Rgb,
+        NEUTRAL_BRIGHTNESS,
     };
     use crate::Theme;
     use std::collections::HashMap;
@@ -1033,12 +1076,12 @@ mod tests {
     #[test]
     fn builds_a_complete_palette_from_matugen_roles() {
         let json = matugen_json("#95cdf7", "#256489");
-        let dark = palette_from_matugen_json(&json, "dark", &[]).unwrap();
+        let dark = palette_from_matugen_json(&json, "dark", &[], NEUTRAL_BRIGHTNESS).unwrap();
         assert_eq!(dark["BASE00"], "#101417");
         assert_eq!(dark["BASE04"], "#c1c7ce");
         assert!(dark.contains_key("LIGHT_GREY"));
 
-        let light = palette_from_matugen_json(&json, "light", &[]).unwrap();
+        let light = palette_from_matugen_json(&json, "light", &[], NEUTRAL_BRIGHTNESS).unwrap();
         assert_eq!(light["BASE00"], "#f9f9f9");
         for key in [
             "GREY_FG",
@@ -1062,9 +1105,9 @@ mod tests {
     #[test]
     fn different_matugen_schemes_produce_different_accents() {
         let cool =
-            palette_from_matugen_json(&matugen_json("#95cdf7", "#256489"), "dark", &[]).unwrap();
+            palette_from_matugen_json(&matugen_json("#95cdf7", "#256489"), "dark", &[], NEUTRAL_BRIGHTNESS).unwrap();
         let expressive =
-            palette_from_matugen_json(&matugen_json("#becf76", "#4a5d00"), "dark", &[]).unwrap();
+            palette_from_matugen_json(&matugen_json("#becf76", "#4a5d00"), "dark", &[], NEUTRAL_BRIGHTNESS).unwrap();
         assert_ne!(cool["BASE0D"], expressive["BASE0D"]);
         assert_ne!(cool["BASE0B"], expressive["BASE0B"]);
         assert_eq!(cool["BASE00"], expressive["BASE00"]);
@@ -1077,7 +1120,13 @@ mod tests {
     fn accent_hues(pixels: &[Rgb], variant: &str) -> Vec<f32> {
         let json = matugen_json("#95cdf7", "#256489");
         let palette =
-            palette_from_matugen_json(&json, variant, &wallpaper_hues(pixels)).unwrap();
+            palette_from_matugen_json(
+            &json,
+            variant,
+            &wallpaper_hues(pixels),
+            NEUTRAL_BRIGHTNESS,
+        )
+        .unwrap();
         ACCENT_KEYS
             .iter()
             .map(|key| {
@@ -1132,5 +1181,52 @@ mod tests {
         for hue in accent_hues(&pixels, "dark") {
             assert!(hue_distance(hue, primary_hue) <= 52.0, "hue {hue}");
         }
+    }
+
+    fn lightness_of(palette: &std::collections::HashMap<String, String>, key: &str) -> f32 {
+        let hex = &palette[key];
+        let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+        rgb_to_hsl(Rgb(channel(1), channel(3), channel(5))).2
+    }
+
+    fn palette_at(variant: &str, brightness: f32) -> std::collections::HashMap<String, String> {
+        let json = matugen_json("#95cdf7", "#256489");
+        palette_from_matugen_json(&json, variant, &[], brightness).unwrap()
+    }
+
+    #[test]
+    fn brightness_is_measured_from_pixels() {
+        assert!(wallpaper_brightness(&[Rgb(0, 0, 0); 10]) < 0.01);
+        assert!(wallpaper_brightness(&[Rgb(255, 255, 255); 10]) > 0.99);
+        assert_eq!(wallpaper_brightness(&[]), NEUTRAL_BRIGHTNESS);
+    }
+
+    #[test]
+    fn dark_wallpaper_dims_foregrounds_in_dark_variant() {
+        let dark_wall = palette_at("dark", 0.05);
+        let mid_wall = palette_at("dark", 0.5);
+        let bright_wall = palette_at("dark", 0.9);
+        for key in ["GREY_FG", "BASE05", "BASE0D"] {
+            assert!(lightness_of(&dark_wall, key) < lightness_of(&mid_wall, key), "{key}");
+        }
+        // Mid-gray and brighter wallpapers keep matugen's tones.
+        assert_eq!(mid_wall, bright_wall);
+        // Dimmed, but still clearly readable against the background.
+        for key in ["GREY_FG", "BASE05", "BASE0D"] {
+            let gap = lightness_of(&dark_wall, key) - lightness_of(&dark_wall, "BASE00");
+            assert!(gap >= 0.3, "{key} gap {gap}");
+        }
+    }
+
+    #[test]
+    fn bright_wallpaper_softens_foregrounds_in_light_variant() {
+        let bright_wall = palette_at("light", 0.95);
+        let mid_wall = palette_at("light", 0.5);
+        for key in ["GREY_FG", "BASE05", "BASE0D"] {
+            assert!(lightness_of(&bright_wall, key) > lightness_of(&mid_wall, key), "{key}");
+            let gap = lightness_of(&bright_wall, "BASE00") - lightness_of(&bright_wall, key);
+            assert!(gap >= 0.3, "{key} gap {gap}");
+        }
+        assert_eq!(mid_wall, palette_at("light", 0.1));
     }
 }

@@ -192,6 +192,11 @@ but every accent (`BASE08`-`BASE0F`, `TEAL`) is built from up to four distinct
 hues found in the wallpaper. A wallpaper with few colors reuses those hues with
 small hue/lightness variations instead of introducing hues it doesn't contain.
 A grayscale wallpaper falls back to matugen's primary hue.
+Brightness is matched too: on a wallpaper darker than mid-gray (dark variant)
+or brighter than mid-gray (light variant), accents, text and especially the
+secondary/comment gray (`BASE04`, `GREY_FG`) are pulled toward the background,
+by up to 40% for the secondary gray at the extreme. Mid-gray and opposite-side
+wallpapers are unchanged.
 
 ## Usage
 
