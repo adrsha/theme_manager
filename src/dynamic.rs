@@ -6,6 +6,21 @@ use std::process::{Command, Stdio};
 
 const SIZE: usize = 96;
 
+/// Material 3 scheme names accepted by `MATUGEN_SCHEME`, matching matugen's
+/// `--type` values. Both `rainbow` and `scheme-rainbow` spellings are accepted.
+const MATUGEN_SCHEMES: &[&str] = &[
+    "content",
+    "expressive",
+    "fidelity",
+    "fruit-salad",
+    "monochrome",
+    "neutral",
+    "rainbow",
+    "tonal-spot",
+    "vibrant",
+    "smart",
+];
+
 pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
     if theme.vars.get("MODE").map(String::as_str) != Some("dynamic") {
         return Ok(());
@@ -33,9 +48,14 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
         "WALLPAPER".to_string(),
         wallpaper.to_string_lossy().into_owned(),
     );
-    let pixels = decode_representative_frame(&wallpaper)?;
     let variant = theme.require("VARIANT")?;
-    let generated = generate_palette(&pixels, variant)?;
+    let generated = if let Some(scheme) = theme.vars.get("MATUGEN_SCHEME") {
+        let scheme = normalize_matugen_scheme(scheme)?;
+        generate_matugen_palette(&wallpaper, variant, &scheme)?
+    } else {
+        let pixels = decode_representative_frame(&wallpaper)?;
+        generate_palette(&pixels, variant)?
+    };
 
     // Explicit colors remain valid overrides. Dynamic mode only fills keys
     // omitted from the theme file.
@@ -290,9 +310,275 @@ fn generate_palette(pixels: &[Rgb], variant: &str) -> Result<HashMap<String, Str
         ("PINK", pink),
         ("BABY_PINK", baby_pink),
         ("PURPLE", purple),
+        ("LIGHT_GREY", base04),
     ] {
         palette.insert(key.to_string(), color.to_hex());
     }
+    add_base30_compatibility(
+        &mut palette,
+        dark,
+        base00,
+        base01,
+        base02,
+        base03,
+        base04,
+        green,
+        blue,
+        yellow,
+        purple,
+        orange,
+    );
+    Ok(palette)
+}
+
+/// NvChad/base46 expects more `base_30` keys than the 16-color palette
+/// provides. Fill them for every dynamic palette so chadrc does not fall back
+/// to the built-in onedark theme when theme-manager generated the colors.
+#[allow(clippy::too_many_arguments)]
+fn add_base30_compatibility(
+    palette: &mut HashMap<String, String>,
+    dark: bool,
+    base00: Rgb,
+    base01: Rgb,
+    base02: Rgb,
+    base03: Rgb,
+    base04: Rgb,
+    green: Rgb,
+    blue: Rgb,
+    yellow: Rgb,
+    purple: Rgb,
+    orange: Rgb,
+) {
+    // Light themes need the opposite direction: accents must get darker to
+    // stay readable on a bright background.
+    let highlight = |color: Rgb| {
+        mix(
+            color,
+            if dark {
+                Rgb(255, 255, 255)
+            } else {
+                Rgb(0, 0, 0)
+            },
+            0.20,
+        )
+    };
+    let shadow = |color: Rgb| {
+        mix(
+            color,
+            if dark {
+                Rgb(0, 0, 0)
+            } else {
+                Rgb(255, 255, 255)
+            },
+            0.25,
+        )
+    };
+    for (key, color) in [
+        ("GREY_FG", base04),
+        ("GREY_FG2", highlight(base04)),
+        (
+            "LINE",
+            if dark {
+                mix(base02, base00, 0.35)
+            } else {
+                base03
+            },
+        ),
+        ("VIBRANT_GREEN", highlight(green)),
+        ("NORD_BLUE", highlight(blue)),
+        ("SUN", highlight(yellow)),
+        ("DARK_PURPLE", shadow(purple)),
+        ("ORANGE", orange),
+        (
+            "STATUSLINE_BG",
+            if dark {
+                mix(base01, base00, 0.35)
+            } else {
+                base01
+            },
+        ),
+        ("LIGHTBG", if dark { base02 } else { base01 }),
+        ("PMENU_BG", base02),
+        ("FOLDER_BG", base04),
+    ] {
+        palette.insert(key.to_string(), color.to_hex());
+    }
+}
+
+fn normalize_matugen_scheme(value: &str) -> Result<String, ThemeError> {
+    let value = value.trim();
+    let name = value.strip_prefix("scheme-").unwrap_or(value);
+    if MATUGEN_SCHEMES.contains(&name) {
+        Ok(format!("scheme-{name}"))
+    } else {
+        Err(ThemeError::InvalidStyle(format!(
+            "unknown MATUGEN_SCHEME '{value}' (use one of: {})",
+            MATUGEN_SCHEMES.join(", ")
+        )))
+    }
+}
+
+fn generate_matugen_palette(
+    wallpaper: &Path,
+    variant: &str,
+    scheme: &str,
+) -> Result<HashMap<String, String>, ThemeError> {
+    let output = Command::new("matugen")
+        .args(["image"])
+        .arg(wallpaper)
+        .args([
+            "-m",
+            variant,
+            "-t",
+            scheme,
+            "-j",
+            "hex",
+            "--dry-run",
+            "-q",
+            "--source-color-index",
+            "0",
+        ])
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| ThemeError::Dynamic(format!("could not run matugen: {error}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ThemeError::Dynamic(format!(
+            "matugen could not generate a {scheme} palette for '{}': {}",
+            wallpaper.display(),
+            stderr.trim()
+        )));
+    }
+
+    palette_from_matugen_json(&String::from_utf8_lossy(&output.stdout), variant)
+}
+
+/// Read one role from matugen's `colors` object for the requested mode.
+fn matugen_color(json: &str, role: &str, mode: &str) -> Option<Rgb> {
+    let colors = json.split_once("\"colors\"")?.1;
+    let role_key = format!("\"{role}\"");
+    let (_, after_role) = colors.split_once(&role_key)?;
+    let mode_key = format!("\"{mode}\"");
+    let (_, after_mode) = after_role.split_once(&mode_key)?;
+    let (_, after_color) = after_mode.split_once("\"color\"")?;
+    let (_, after_colon) = after_color.split_once(':')?;
+    let hex = after_colon.trim_start().strip_prefix('"')?.split('"').next()?;
+    crate::hex_to_rgb(hex)
+        .ok()
+        .map(|(r, g, b)| Rgb(r, g, b))
+}
+
+fn palette_from_matugen_json(
+    json: &str,
+    variant: &str,
+) -> Result<HashMap<String, String>, ThemeError> {
+    let dark = match variant {
+        "dark" => true,
+        "light" => false,
+        value => return Err(ThemeError::InvalidVariant(value.to_string())),
+    };
+    let role = |name: &str| {
+        matugen_color(json, name, variant)
+            .ok_or_else(|| ThemeError::Dynamic(format!("matugen output is missing colors.{name}")))
+    };
+
+    let background = role("background")?;
+    let base01 = role("surface_container_lowest").unwrap_or(background);
+    let base02 = role("surface_container_low").unwrap_or(background);
+    let base03 = role("surface_container").unwrap_or(background);
+    let base04 = role("on_surface_variant")?;
+    let base05 = role("on_surface")?;
+    let text_tint = if dark {
+        Rgb(255, 255, 255)
+    } else {
+        Rgb(0, 0, 0)
+    };
+    let base06 = mix(base05, text_tint, 0.10);
+    let base07 = mix(base05, text_tint, 0.20);
+
+    let primary = role("primary")?;
+    let secondary = role("secondary")?;
+    let tertiary = role("tertiary")?;
+    let error = role("error")?;
+
+    // Material provides primary/secondary/tertiary/error, but not the full
+    // terminal rainbow. Keep those roles where they fit and derive the rest
+    // from the scheme's own saturation and lightness, so expressive/rainbow/
+    // monochrome palettes still differ from one another.
+    let primary_hsl = rgb_to_hsl(primary);
+    let saturation = primary_hsl.1.min(0.82);
+    let lightness = if dark {
+        primary_hsl.2.clamp(0.55, 0.78)
+    } else {
+        primary_hsl.2.clamp(0.32, 0.52)
+    };
+    let derived = |hue: f32| hsl_to_rgb(Hsl(hue, saturation, lightness));
+
+    let red = error;
+    let orange = derived(30.0);
+    let yellow = derived(52.0);
+    let green = derived(125.0);
+    let teal = derived(170.0);
+    let cyan = secondary;
+    let blue = primary;
+    let purple = tertiary;
+    let pink = derived(330.0);
+    let baby_pink = mix(pink, base07, 0.35);
+
+    let mut palette = HashMap::new();
+    for (key, color) in [
+        ("BASE00", background),
+        ("BASE01", base01),
+        ("BASE02", base02),
+        ("BASE03", base03),
+        ("BASE04", base04),
+        ("BASE05", base05),
+        ("BASE06", base06),
+        ("BASE07", base07),
+        ("BASE08", red),
+        ("BASE09", orange),
+        ("BASE0A", yellow),
+        ("BASE0B", green),
+        ("BASE0C", cyan),
+        ("BASE0D", blue),
+        ("BASE0E", purple),
+        ("BASE0F", pink),
+        ("BLACK", background),
+        ("DARKER_BLACK", base01),
+        ("BLACK2", base02),
+        ("ONE_BG", base01),
+        ("ONE_BG2", base02),
+        ("ONE_BG3", base03),
+        ("GREY", base03),
+        ("WHITE", base05),
+        ("RED", red),
+        ("GREEN", green),
+        ("YELLOW", yellow),
+        ("BLUE", blue),
+        ("CYAN", cyan),
+        ("TEAL", teal),
+        ("PINK", pink),
+        ("BABY_PINK", baby_pink),
+        ("PURPLE", purple),
+        ("LIGHT_GREY", base04),
+    ] {
+        palette.insert(key.to_string(), color.to_hex());
+    }
+    add_base30_compatibility(
+        &mut palette,
+        dark,
+        background,
+        base01,
+        base02,
+        base03,
+        base04,
+        green,
+        blue,
+        yellow,
+        purple,
+        orange,
+    );
     Ok(palette)
 }
 
@@ -422,8 +708,9 @@ fn hsl_to_rgb(Hsl(h, s, l): Hsl) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_palette, parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper,
-        resolve_dynamic_palette, retain_current_palette, rgb_to_hsl, Rgb,
+        generate_palette, normalize_matugen_scheme, palette_from_matugen_json,
+        parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
+        retain_current_palette, rgb_to_hsl, Rgb,
     };
     use crate::Theme;
     use std::collections::HashMap;
@@ -470,6 +757,19 @@ mod tests {
             "PINK",
             "BABY_PINK",
             "PURPLE",
+            "LIGHT_GREY",
+            "GREY_FG",
+            "GREY_FG2",
+            "LINE",
+            "VIBRANT_GREEN",
+            "NORD_BLUE",
+            "SUN",
+            "DARK_PURPLE",
+            "ORANGE",
+            "STATUSLINE_BG",
+            "LIGHTBG",
+            "PMENU_BG",
+            "FOLDER_BG",
         ] {
             assert!(palette.contains_key(key), "missing {key}");
         }
@@ -555,7 +855,7 @@ mod tests {
             ]),
         };
         resolve_dynamic_palette(&mut theme).unwrap();
-        assert_eq!(theme.vars.len(), 36);
+        assert_eq!(theme.vars.len(), 49);
         assert!(theme.vars["BASE00"].starts_with('#'));
         let _ = fs::remove_file(path);
     }
@@ -613,5 +913,83 @@ mod tests {
         let colors = parse_published_colors("export THEME_NAME='carbon'\nexport THEME_BASE00='bad'\nexport THEME_BASE01='#123456'\n");
         assert_eq!(colors.len(), 1);
         assert_eq!(colors["BASE01"], "#123456");
+    }
+
+    fn matugen_json(primary: &str, primary_light: &str) -> String {
+        let role = |name: &str, dark: &str, light: &str| {
+            format!(
+                r#""{name}":{{"dark":{{"color":"{dark}"}},"default":{{"color":"{dark}"}},"light":{{"color":"{light}"}}}}"#
+            )
+        };
+        let roles = [
+            role("background", "#101417", "#f9f9f9"),
+            role("surface_container_lowest", "#0a0f12", "#ffffff"),
+            role("surface_container_low", "#181c20", "#f1f4f9"),
+            role("surface_container", "#1c2024", "#ebebf3"),
+            role("on_surface_variant", "#c1c7ce", "#41474d"),
+            role("on_surface", "#dfe3e8", "#181c20"),
+            role("primary", primary, primary_light),
+            role("secondary", "#b7c9d9", "#4f606e"),
+            role("tertiary", "#cec0e8", "#64597c"),
+            role("error", "#ffb4ab", "#ba1a1a"),
+        ];
+        format!(r#"{{"colors":{{{}}}}}"#, roles.join(","))
+    }
+
+    #[test]
+    fn matugen_scheme_names_accept_both_spellings() {
+        assert_eq!(
+            normalize_matugen_scheme("tonal-spot").unwrap(),
+            "scheme-tonal-spot"
+        );
+        assert_eq!(
+            normalize_matugen_scheme("scheme-rainbow").unwrap(),
+            "scheme-rainbow"
+        );
+        assert!(normalize_matugen_scheme("not-a-scheme").is_err());
+    }
+
+    #[test]
+    fn builds_a_complete_palette_from_matugen_roles() {
+        let json = matugen_json("#95cdf7", "#256489");
+        let dark = palette_from_matugen_json(&json, "dark").unwrap();
+        assert_eq!(dark["BASE00"], "#101417");
+        assert_eq!(dark["BASE0D"], "#95cdf7");
+        assert_eq!(dark["BLUE"], "#95cdf7");
+        assert_eq!(dark["BASE08"], "#ffb4ab");
+        assert_eq!(dark["BASE0C"], "#b7c9d9");
+        assert_eq!(dark["BASE04"], "#c1c7ce");
+        assert!(dark.contains_key("LIGHT_GREY"));
+
+        let light = palette_from_matugen_json(&json, "light").unwrap();
+        assert_eq!(light["BASE00"], "#f9f9f9");
+        assert_eq!(light["BASE0D"], "#256489");
+        for key in [
+            "GREY_FG",
+            "GREY_FG2",
+            "LINE",
+            "VIBRANT_GREEN",
+            "NORD_BLUE",
+            "SUN",
+            "DARK_PURPLE",
+            "ORANGE",
+            "STATUSLINE_BG",
+            "LIGHTBG",
+            "PMENU_BG",
+            "FOLDER_BG",
+        ] {
+            assert!(dark.contains_key(key), "missing {key}");
+            assert!(light.contains_key(key), "light is missing {key}");
+        }
+    }
+
+    #[test]
+    fn different_matugen_schemes_produce_different_accents() {
+        let cool = palette_from_matugen_json(&matugen_json("#95cdf7", "#256489"), "dark").unwrap();
+        let expressive =
+            palette_from_matugen_json(&matugen_json("#becf76", "#4a5d00"), "dark").unwrap();
+        assert_ne!(cool["BASE0D"], expressive["BASE0D"]);
+        assert_ne!(cool["BASE0B"], expressive["BASE0B"]);
+        assert_eq!(cool["BASE00"], expressive["BASE00"]);
     }
 }
