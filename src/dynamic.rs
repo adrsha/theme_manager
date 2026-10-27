@@ -19,7 +19,12 @@ const LIGHTNESS_RANGE: f32 = 0.15;
 const NEUTRAL_BRIGHTNESS: f32 = 0.5;
 // Largest share of a foreground color replaced by the background, reached on a
 // wallpaper as extreme as the variant itself (pitch black for dark, white for light).
-const MAX_SOFTEN: f32 = 0.4;
+// Softening stops early when a color would fall below its minimum contrast.
+const MAX_SOFTEN: f32 = 0.85;
+// WCAG contrast ratios against the background: body text, then accents and the
+// secondary/comment gray.
+const MIN_TEXT_CONTRAST: f32 = 7.0;
+const MIN_ACCENT_CONTRAST: f32 = 4.5;
 
 /// Material 3 scheme names accepted by `MATUGEN_SCHEME`, matching matugen's
 /// `--type` values. Both `rainbow` and `scheme-rainbow` spellings are accepted.
@@ -538,13 +543,13 @@ fn palette_from_matugen_json(
     let base01 = role("surface_container_lowest").unwrap_or(background);
     let base02 = role("surface_container_low").unwrap_or(background);
     let base03 = role("surface_container").unwrap_or(background);
-    // Pull a foreground color toward the background; `weight` scales how much.
-    let softness = softness(brightness, dark);
-    let soften = |color: Rgb, weight: f32| mix(color, background, softness * MAX_SOFTEN * weight);
+    // Pull a foreground color toward the background, keeping `min_contrast`.
+    let amount = softness(brightness, dark) * MAX_SOFTEN;
+    let soften =
+        |color: Rgb, min_contrast: f32| soften_toward(color, background, amount, min_contrast);
 
-    // BASE04 is the secondary/comment color, so it is softened the most.
-    let base04 = soften(role("on_surface_variant")?, 1.0);
-    let base05 = soften(role("on_surface")?, 0.3);
+    let base04 = soften(role("on_surface_variant")?, MIN_ACCENT_CONTRAST);
+    let base05 = soften(role("on_surface")?, MIN_TEXT_CONTRAST);
     let text_tint = if dark {
         Rgb(255, 255, 255)
     } else {
@@ -556,7 +561,7 @@ fn palette_from_matugen_json(
     let fallback = [rgb_to_hsl(role("primary")?)];
     let hues = if hues.is_empty() { &fallback[..] } else { hues };
     let accents: Vec<Rgb> = (0..9)
-        .map(|i| soften(accent_from_hues(hues, i, dark), 0.6))
+        .map(|i| soften(accent_from_hues(hues, i, dark), MIN_ACCENT_CONTRAST))
         .collect();
 
     let red = accents[0];
@@ -645,6 +650,33 @@ fn softness(brightness: f32, dark: bool) -> f32 {
     let brightness = brightness.clamp(0.0, 1.0);
     let toward_background = if dark { 1.0 - brightness } else { brightness };
     ((toward_background - 0.5) * 2.0).clamp(0.0, 1.0)
+}
+
+/// Mix `color` toward `background` by up to `amount`, using the strongest
+/// softening that still keeps `min_contrast` against the background.
+fn soften_toward(color: Rgb, background: Rgb, amount: f32, min_contrast: f32) -> Rgb {
+    (0..=10)
+        .map(|i| mix(color, background, amount * (1.0 - i as f32 / 10.0)))
+        .find(|candidate| contrast_ratio(*candidate, background) >= min_contrast)
+        .unwrap_or(color)
+}
+
+/// WCAG contrast ratio between two colors (1.0 to 21.0).
+fn contrast_ratio(a: Rgb, b: Rgb) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+fn luminance(Rgb(r, g, b): Rgb) -> f32 {
+    let linear = |channel: u8| {
+        let c = channel as f32 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
 }
 
 /// Distinct hues of the wallpaper, most dominant first. Prefers saturated
@@ -815,8 +847,8 @@ mod tests {
     use super::{
         generate_palette, hue_distance, normalize_matugen_scheme, palette_from_matugen_json,
         parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
-        retain_current_palette, rgb_to_hsl, wallpaper_brightness, wallpaper_hues, Rgb,
-        NEUTRAL_BRIGHTNESS,
+        contrast_ratio, retain_current_palette, rgb_to_hsl, wallpaper_brightness, wallpaper_hues,
+        Rgb, MIN_ACCENT_CONTRAST, MIN_TEXT_CONTRAST, NEUTRAL_BRIGHTNESS,
     };
     use crate::Theme;
     use std::collections::HashMap;
@@ -1228,5 +1260,23 @@ mod tests {
             assert!(gap >= 0.3, "{key} gap {gap}");
         }
         assert_eq!(mid_wall, palette_at("light", 0.1));
+    }
+
+    #[test]
+    fn softening_keeps_foregrounds_readable_on_the_darkest_wallpaper() {
+        let palette = palette_at("dark", 0.0);
+        let rgb = |key: &str| {
+            let hex = &palette[key];
+            let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+            Rgb(channel(1), channel(3), channel(5))
+        };
+        let background = rgb("BASE00");
+        assert!(contrast_ratio(rgb("BASE05"), background) >= MIN_TEXT_CONTRAST);
+        for key in ["GREY_FG", "BASE08", "BASE0B", "BASE0D"] {
+            assert!(contrast_ratio(rgb(key), background) >= MIN_ACCENT_CONTRAST, "{key}");
+        }
+        // And clearly dimmer than on a normal wallpaper.
+        let normal = palette_at("dark", 0.5);
+        assert!(lightness_of(&palette, "BASE07") + 0.15 < lightness_of(&normal, "BASE07"));
     }
 }
