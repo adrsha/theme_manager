@@ -6,6 +6,16 @@ use std::process::{Command, Stdio};
 
 const SIZE: usize = 96;
 
+// Matugen accent generation: hues come from the wallpaper itself.
+const MIN_ACCENT_SATURATION: f32 = 0.18;
+// Second pass for muted wallpapers that have a tint but no saturated colors.
+const RELAXED_ACCENT_SATURATION: f32 = 0.05;
+const MIN_HUE_GAP: f32 = 25.0;
+const MAX_WALLPAPER_HUES: usize = 4;
+const HUE_STEP: f32 = 12.0;
+const LIGHTNESS_STEP: f32 = 0.05;
+const LIGHTNESS_RANGE: f32 = 0.15;
+
 /// Material 3 scheme names accepted by `MATUGEN_SCHEME`, matching matugen's
 /// `--type` values. Both `rainbow` and `scheme-rainbow` spellings are accepted.
 const MATUGEN_SCHEMES: &[&str] = &[
@@ -66,7 +76,15 @@ pub fn resolve_dynamic_palette(theme: &mut Theme) -> Result<(), ThemeError> {
     let variant = theme.require("VARIANT")?;
     let generated = if let Some(scheme) = theme.vars.get("MATUGEN_SCHEME") {
         let scheme = normalize_matugen_scheme(scheme)?;
-        generate_matugen_palette(&wallpaper, variant, &scheme)?
+        // Without decodable pixels the accents fall back to matugen's primary hue.
+        let hues = match decode_representative_frame(&wallpaper) {
+            Ok(pixels) => wallpaper_hues(&pixels),
+            Err(error) => {
+                eprintln!("theme-manager: {error}; deriving accents from matugen primary");
+                Vec::new()
+            }
+        };
+        generate_matugen_palette(&wallpaper, variant, &scheme, &hues)?
     } else {
         let pixels = decode_representative_frame(&wallpaper)?;
         generate_palette(&pixels, variant)?
@@ -437,6 +455,7 @@ fn generate_matugen_palette(
     wallpaper: &Path,
     variant: &str,
     scheme: &str,
+    hues: &[Hsl],
 ) -> Result<HashMap<String, String>, ThemeError> {
     let output = Command::new("matugen")
         .args(["image"])
@@ -466,7 +485,7 @@ fn generate_matugen_palette(
         )));
     }
 
-    palette_from_matugen_json(&String::from_utf8_lossy(&output.stdout), variant)
+    palette_from_matugen_json(&String::from_utf8_lossy(&output.stdout), variant, hues)
 }
 
 /// Read one role from matugen's `colors` object for the requested mode.
@@ -484,9 +503,12 @@ fn matugen_color(json: &str, role: &str, mode: &str) -> Option<Rgb> {
         .map(|(r, g, b)| Rgb(r, g, b))
 }
 
+/// Neutrals come from matugen; every accent is built from `hues` (the
+/// wallpaper's own colors), never from fixed hues or Material's red error role.
 fn palette_from_matugen_json(
     json: &str,
     variant: &str,
+    hues: &[Hsl],
 ) -> Result<HashMap<String, String>, ThemeError> {
     let dark = match variant {
         "dark" => true,
@@ -512,33 +534,19 @@ fn palette_from_matugen_json(
     let base06 = mix(base05, text_tint, 0.10);
     let base07 = mix(base05, text_tint, 0.20);
 
-    let primary = role("primary")?;
-    let secondary = role("secondary")?;
-    let tertiary = role("tertiary")?;
-    let error = role("error")?;
+    let fallback = [rgb_to_hsl(role("primary")?)];
+    let hues = if hues.is_empty() { &fallback[..] } else { hues };
+    let accents: Vec<Rgb> = (0..9).map(|i| accent_from_hues(hues, i, dark)).collect();
 
-    // Material provides primary/secondary/tertiary/error, but not the full
-    // terminal rainbow. Keep those roles where they fit and derive the rest
-    // from the scheme's own saturation and lightness, so expressive/rainbow/
-    // monochrome palettes still differ from one another.
-    let primary_hsl = rgb_to_hsl(primary);
-    let saturation = primary_hsl.1.min(0.82);
-    let lightness = if dark {
-        primary_hsl.2.clamp(0.55, 0.78)
-    } else {
-        primary_hsl.2.clamp(0.32, 0.52)
-    };
-    let derived = |hue: f32| hsl_to_rgb(Hsl(hue, saturation, lightness));
-
-    let red = error;
-    let orange = derived(30.0);
-    let yellow = derived(52.0);
-    let green = derived(125.0);
-    let teal = derived(170.0);
-    let cyan = secondary;
-    let blue = primary;
-    let purple = tertiary;
-    let pink = derived(330.0);
+    let red = accents[0];
+    let orange = accents[1];
+    let yellow = accents[2];
+    let green = accents[3];
+    let cyan = accents[4];
+    let blue = accents[5];
+    let purple = accents[6];
+    let pink = accents[7];
+    let teal = accents[8];
     let baby_pink = mix(pink, base07, 0.35);
 
     let mut palette = HashMap::new();
@@ -595,6 +603,46 @@ fn palette_from_matugen_json(
         orange,
     );
     Ok(palette)
+}
+
+/// Distinct hues of the wallpaper, most dominant first. Prefers saturated
+/// colors; a muted wallpaper retries with a lower saturation floor so its
+/// faint tint is still used. Empty only for (near-)grayscale wallpapers.
+fn wallpaper_hues(pixels: &[Rgb]) -> Vec<Hsl> {
+    let candidates: Vec<Hsl> = dominant_colors(pixels).into_iter().map(rgb_to_hsl).collect();
+    for min_saturation in [MIN_ACCENT_SATURATION, RELAXED_ACCENT_SATURATION] {
+        let mut hues: Vec<Hsl> = Vec::new();
+        for hsl in candidates.iter().filter(|c| c.1 >= min_saturation) {
+            let distinct = hues.iter().all(|h| hue_distance(h.0, hsl.0) >= MIN_HUE_GAP);
+            if distinct && hues.len() < MAX_WALLPAPER_HUES {
+                hues.push(*hsl);
+            }
+        }
+        if !hues.is_empty() {
+            return hues;
+        }
+    }
+    Vec::new()
+}
+
+/// Accent `index`: slots cycle through `hues` (non-empty). Each repeat nudges
+/// hue and lightness slightly, so a wallpaper with few colors still gets
+/// distinct accents that stay close to its own hues.
+fn accent_from_hues(hues: &[Hsl], index: usize, dark: bool) -> Rgb {
+    let base = hues[index % hues.len()];
+    let round = index / hues.len();
+    // Variation steps per round: 0, +1, -1, +2, -2, ...
+    let magnitude = ((round + 1) / 2) as f32;
+    let step = if round % 2 == 1 { magnitude } else { -magnitude };
+
+    let center = if dark { 0.64 } else { 0.42 };
+    let lightness = (center + step * LIGHTNESS_STEP)
+        .clamp(center - LIGHTNESS_RANGE, center + LIGHTNESS_RANGE);
+    hsl_to_rgb(Hsl(
+        (base.0 + step * HUE_STEP).rem_euclid(360.0),
+        base.1.clamp(0.25, 0.82),
+        lightness,
+    ))
 }
 
 fn dominant_colors(pixels: &[Rgb]) -> Vec<Rgb> {
@@ -723,9 +771,9 @@ fn hsl_to_rgb(Hsl(h, s, l): Hsl) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::{
-        generate_palette, normalize_matugen_scheme, palette_from_matugen_json,
+        generate_palette, hue_distance, normalize_matugen_scheme, palette_from_matugen_json,
         parse_fish_wallpaper, parse_published_colors, parse_sh_wallpaper, resolve_dynamic_palette,
-        retain_current_palette, rgb_to_hsl, Rgb,
+        retain_current_palette, rgb_to_hsl, wallpaper_hues, Rgb,
     };
     use crate::Theme;
     use std::collections::HashMap;
@@ -985,18 +1033,13 @@ mod tests {
     #[test]
     fn builds_a_complete_palette_from_matugen_roles() {
         let json = matugen_json("#95cdf7", "#256489");
-        let dark = palette_from_matugen_json(&json, "dark").unwrap();
+        let dark = palette_from_matugen_json(&json, "dark", &[]).unwrap();
         assert_eq!(dark["BASE00"], "#101417");
-        assert_eq!(dark["BASE0D"], "#95cdf7");
-        assert_eq!(dark["BLUE"], "#95cdf7");
-        assert_eq!(dark["BASE08"], "#ffb4ab");
-        assert_eq!(dark["BASE0C"], "#b7c9d9");
         assert_eq!(dark["BASE04"], "#c1c7ce");
         assert!(dark.contains_key("LIGHT_GREY"));
 
-        let light = palette_from_matugen_json(&json, "light").unwrap();
+        let light = palette_from_matugen_json(&json, "light", &[]).unwrap();
         assert_eq!(light["BASE00"], "#f9f9f9");
-        assert_eq!(light["BASE0D"], "#256489");
         for key in [
             "GREY_FG",
             "GREY_FG2",
@@ -1018,11 +1061,76 @@ mod tests {
 
     #[test]
     fn different_matugen_schemes_produce_different_accents() {
-        let cool = palette_from_matugen_json(&matugen_json("#95cdf7", "#256489"), "dark").unwrap();
+        let cool =
+            palette_from_matugen_json(&matugen_json("#95cdf7", "#256489"), "dark", &[]).unwrap();
         let expressive =
-            palette_from_matugen_json(&matugen_json("#becf76", "#4a5d00"), "dark").unwrap();
+            palette_from_matugen_json(&matugen_json("#becf76", "#4a5d00"), "dark", &[]).unwrap();
         assert_ne!(cool["BASE0D"], expressive["BASE0D"]);
         assert_ne!(cool["BASE0B"], expressive["BASE0B"]);
         assert_eq!(cool["BASE00"], expressive["BASE00"]);
+    }
+
+    const ACCENT_KEYS: [&str; 9] = [
+        "BASE08", "BASE09", "BASE0A", "BASE0B", "BASE0C", "BASE0D", "BASE0E", "BASE0F", "TEAL",
+    ];
+
+    fn accent_hues(pixels: &[Rgb], variant: &str) -> Vec<f32> {
+        let json = matugen_json("#95cdf7", "#256489");
+        let palette =
+            palette_from_matugen_json(&json, variant, &wallpaper_hues(pixels)).unwrap();
+        ACCENT_KEYS
+            .iter()
+            .map(|key| {
+                let hex = &palette[*key];
+                let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+                rgb_to_hsl(Rgb(channel(1), channel(3), channel(5))).0
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_hue_wallpaper_keeps_every_accent_near_that_hue() {
+        let pixels = vec![Rgb(30, 60, 180); 100];
+        let wall_hue = rgb_to_hsl(pixels[0]).0;
+        for variant in ["dark", "light"] {
+            for hue in accent_hues(&pixels, variant) {
+                assert!(hue_distance(hue, wall_hue) <= 52.0, "{variant}: hue {hue}");
+            }
+        }
+    }
+
+    #[test]
+    fn multi_hue_wallpaper_only_uses_its_own_hues() {
+        let mut pixels = vec![Rgb(200, 40, 40); 50];
+        pixels.extend(vec![Rgb(40, 200, 60); 50]);
+        let wall_hues: Vec<f32> = pixels.iter().map(|p| rgb_to_hsl(*p).0).collect();
+        assert_eq!(wallpaper_hues(&pixels).len(), 2);
+        for hue in accent_hues(&pixels, "dark") {
+            assert!(
+                wall_hues.iter().any(|w| hue_distance(hue, *w) <= 52.0),
+                "hue {hue} is not near a wallpaper hue"
+            );
+        }
+    }
+
+    #[test]
+    fn muted_wallpaper_still_uses_its_own_tint() {
+        // Saturation ~0.08: below the strict floor, but clearly warm.
+        let pixels = vec![Rgb(130, 120, 110); 100];
+        let wall_hue = rgb_to_hsl(pixels[0]).0;
+        assert_eq!(wallpaper_hues(&pixels).len(), 1);
+        for hue in accent_hues(&pixels, "dark") {
+            assert!(hue_distance(hue, wall_hue) <= 52.0, "hue {hue}");
+        }
+    }
+
+    #[test]
+    fn grayscale_wallpaper_falls_back_to_the_primary_hue() {
+        let pixels = vec![Rgb(120, 120, 120); 100];
+        assert!(wallpaper_hues(&pixels).is_empty());
+        let primary_hue = rgb_to_hsl(Rgb(0x95, 0xcd, 0xf7)).0;
+        for hue in accent_hues(&pixels, "dark") {
+            assert!(hue_distance(hue, primary_hue) <= 52.0, "hue {hue}");
+        }
     }
 }

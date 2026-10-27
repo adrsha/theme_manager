@@ -187,6 +187,12 @@ backgrounds, foregrounds, and semantic accents. In either mode a valid
 wallpaper is required; an extraction error stops the switch instead of applying
 a partially generated theme.
 
+With `MATUGEN_SCHEME` set, backgrounds and foregrounds still come from matugen,
+but every accent (`BASE08`-`BASE0F`, `TEAL`) is built from up to four distinct
+hues found in the wallpaper. A wallpaper with few colors reuses those hues with
+small hue/lightness variations instead of introducing hues it doesn't contain.
+A grayscale wallpaper falls back to matugen's primary hue.
+
 ## Usage
 
 ```fish
