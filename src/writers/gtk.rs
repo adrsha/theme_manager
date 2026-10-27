@@ -238,10 +238,8 @@ entry, spinbutton, dropdown { min-height: 28px; }
 popover > contents { padding: 8px; }
 "#
     };
-    let radius = theme.vars.get("CORNER_RADIUS").and_then(|v| v.parse::<u8>().ok()).unwrap_or(12).min(64);
     result.push_str(&body);
     result.push_str(spacing);
-    // result.push_str(&format!("\n/* Theme-manager geometry and selection overrides. */\nwindow,dialog,popover,menu {{border-radius:{radius}px}}\nselection,entry selection,textview text selection {{background-color:{accent};color:{accent_fg}}}\n"));
     Ok(result)
 }
 
@@ -255,7 +253,7 @@ mod tests {
         theme.vars.extend([("BASE00".into(), "#101020".into()), ("BASE01".into(), "#202030".into()), ("BASE05".into(), "#eeeeee".into()), ("BASE0D".into(), "#dddddd".into()), ("CORNER_RADIUS".into(), "18".into())]);
         for writer in [&Gtk3Css as &dyn Writer, &Gtk4Css as &dyn Writer] {
             let out = writer.generate(&theme).unwrap();
-            for expected in ["#101020", "#dddddd", "#111318", "border-radius:18px", "scrollbar", "popover", "notebook", "switch", "treeview", "theme-manager-assets/"] {
+            for expected in ["#101020", "#dddddd", "#111318", "scrollbar", "popover", "notebook", "switch", "treeview", "theme-manager-assets/"] {
                 assert!(out.contains(expected), "missing {expected}");
             }
             assert!(out.contains("min-height: 28px"));

@@ -11,6 +11,7 @@
 
 pub mod api;
 pub mod dynamic;
+pub mod wallpaper;
 pub mod writers;
 
 use std::collections::HashMap;
@@ -415,10 +416,11 @@ pub fn apply_theme(theme: &Theme) {
     writers::apply_system_variant(theme);
     // Global env (systemd/dbus/hypr) so new processes inherit the palette.
     writers::apply_global_env(theme);
-    // Quickshell watches the published snapshot and draws the wallpaper.
+    // Clients watch the published snapshot; the daemon owns the backdrop.
     if let Err(error) = api::publish(theme) {
         eprintln!("theme-manager: [api] publish failed: {error}");
     }
+    wallpaper::sync(theme);
 }
 
 fn run_writer(writer: &dyn Writer, theme: &Theme) {

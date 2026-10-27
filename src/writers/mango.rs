@@ -2,11 +2,13 @@ use crate::{hex_to_rgb, Theme, ThemeError, Writer};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// Generated colours for the mango (mangowc) compositor.
+/// Generated colours and corner radius for the mango (mangowc) compositor.
 ///
-/// Only colours are generated. Geometry (`border_px`, `border_radius`, gaps)
-/// stays in the user's own mango config: theme defaults (BORDER_SIZE=0) would
-/// otherwise silently remove borders the user configured there.
+/// Only colours and `border_radius` are generated. Border width and gaps stay
+/// in the user's own mango config: theme defaults (BORDER_SIZE=0) would
+/// otherwise silently remove borders the user configured there. `CORNER_RADIUS`
+/// is part of the theme's geometry, so mango follows the same rounded corners
+/// as GTK, the shell, and the rest of the desktop.
 ///
 /// Fallback behaviour: the user keeps hard-coded colours in their own config
 /// *above* the `source_optional` line. Mango ignores a missing optional file,
@@ -72,6 +74,18 @@ impl Writer for Mango {
                 }
             }
         }
+
+        // Keep the compositor's corners in sync with the rest of the desktop.
+        // Skip invalid values instead of emitting a line mango cannot parse.
+        if let Some(radius) = theme.vars.get("CORNER_RADIUS") {
+            match radius.trim().parse::<u8>() {
+                Ok(radius) if radius <= 64 => out.push_str(&format!("border_radius={radius}\n")),
+                _ => eprintln!(
+                    "theme-manager: [mango] ignoring invalid CORNER_RADIUS '{radius}'"
+                ),
+            }
+        }
+
         Ok(out)
     }
 
@@ -162,10 +176,17 @@ mod tests {
     }
 
     #[test]
-    fn never_generates_geometry() {
+    fn follows_corner_radius_but_leaves_border_width_alone() {
         let t = theme(&[("BORDER_SIZE", "0"), ("CORNER_RADIUS", "20")]);
         let out = Mango.generate(&t).unwrap();
         assert!(!out.contains("border_px"));
+        assert!(out.contains("border_radius=20\n"));
+    }
+
+    #[test]
+    fn skips_invalid_corner_radius() {
+        let t = theme(&[("CORNER_RADIUS", "round")]);
+        let out = Mango.generate(&t).unwrap();
         assert!(!out.contains("border_radius"));
     }
 }

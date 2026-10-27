@@ -1,8 +1,10 @@
 # theme-manager
 
-A minimal Rust-based theming system for Hyprland. A single theme file drives
-config generation for Ghostty, Hyprland, swaync, vicinae, GTK, Qt, and Neovim,
-with wallpaper selection published to `~/.local/state/theme/active.json` for Quickshell to render.
+A minimal Rust-based theming system for Hyprland and Mango. A single theme file
+drives config generation for Ghostty, Hyprland, Mango, swaync, vicinae, GTK,
+Qt, and Neovim. The daemon also owns the wallpaper: `awww` paints stills,
+`mpvpaper` plays videos, and the resolved state is published to
+`~/.local/state/theme/active.json` for shell clients.
 
 ## How it works
 
@@ -21,6 +23,18 @@ cargo build --release
 cp target/release/theme-set ~/.local/bin/
 cp target/release/theme-daemon ~/.local/bin/
 ```
+
+Runtime helpers, all optional at build time and looked up on `PATH`:
+
+| Helper | Used for |
+|---|---|
+| `matugen` | `MATUGEN_SCHEME` Material 3 palettes |
+| `ffmpeg` | fallback palette extraction and video frames |
+| `awww` | still-image wallpapers |
+| `mpvpaper` | video wallpapers |
+| `procps` (`pgrep`/`pkill`) | wallpaper process detection and cleanup |
+
+Missing helpers are logged; themes that do not need them keep working.
 
 Add to `hyprland.lua`:
 
@@ -83,6 +97,11 @@ MODE=dynamic
 # Wallpaper (required by MODE=dynamic; otherwise optional)
 WALLPAPER=/home/you/walls/my_wallpaper.png
 
+# Optional Material 3 scheme for MODE=dynamic. Accepted values match matugen:
+# content, expressive, fidelity, fruit-salad, monochrome, neutral, rainbow,
+# tonal-spot, vibrant, smart. The `scheme-` prefix is also accepted.
+MATUGEN_SCHEME=tonal-spot
+
 # Base16 colors
 BASE00=#1a1b26
 BASE01=#16161e
@@ -144,17 +163,29 @@ MODE=dynamic
 WALLPAPER=/home/you/walls/city.webm
 ```
 
-Use `WALLPAPER=current` for a reusable Matugen-style palette that extracts
-colors from the wallpaper active immediately before the theme switch. The
-resolved absolute path is then carried through to the generated environment
-and wallpaper writer.
+Use `WALLPAPER=current` for a reusable palette that extracts colors from the
+wallpaper active immediately before the theme switch. The resolved absolute
+path is then carried through to the generated environment and wallpaper
+manager.
 
-FFmpeg decodes a representative frame from JPEG, PNG, GIF, animated WebP, or a
-supported video. The manager analyzes its dominant colors and creates variant-
-appropriate backgrounds, foregrounds, and semantic accents for every existing
-writer. Individual color keys may still be specified to override generated
-values. Dynamic mode requires a valid wallpaper and FFmpeg; an extraction error
-stops the switch instead of applying a partially generated theme.
+Set `MATUGEN_SCHEME` to let [matugen](https://github.com/InioX/matugen) generate
+a Material 3 palette. The value is passed to `matugen image --type`; both
+`tonal-spot` and `scheme-tonal-spot` spellings work. Material supplies the
+neutral surfaces and the primary/secondary/tertiary/error roles; the remaining
+semantic accents are derived from the scheme's own saturation and lightness, so
+`expressive`, `rainbow`, `vibrant`, and `monochrome` produce visibly different
+palettes. NvChad/base46 keys that Material does not define (`GREY_FG`, `LINE`,
+`VIBRANT_GREEN`, `NORD_BLUE`, `SUN`, `DARK_PURPLE`, `ORANGE`, `STATUSLINE_BG`,
+`LIGHTBG`, `PMENU_BG`, `FOLDER_BG`) are derived from the generated palette too,
+so chadrc never falls back to its built-in onedark theme. Individual color keys
+still override generated values.
+
+Without `MATUGEN_SCHEME`, the manager falls back to its FFmpeg-based extractor:
+it decodes a representative frame from JPEG, PNG, GIF, animated WebP, or a
+supported video, analyzes its dominant colors, and creates variant-appropriate
+backgrounds, foregrounds, and semantic accents. In either mode a valid
+wallpaper is required; an extraction error stops the switch instead of applying
+a partially generated theme.
 
 ## Usage
 
@@ -239,7 +270,7 @@ palettes stay intact. Restart apps that do not reload their appearance live.
 | GTK 3/4 CSS | `~/.local/share/themes/ThemeManager/gtk-3.0/gtk.css` and `gtk-4.0/gtk.css` | selected by `GTK_THEME=ThemeManager` or GNOME `gtk-theme`; restart apps |
 | App-neutral API | `~/.local/state/theme/active.json` | atomic update; watch parent directory for `MOVED_TO` |
 | Qt6ct | `~/.config/qt6ct/theme-manager.conf`, `~/.config/qt6ct/colors/theme-manager.conf` | copy `color_scheme_path` and `style` into `qt6ct.conf` once; generated colors update on switches |
-| Wallpaper | `~/.local/state/theme/active.json` | Quickshell watches `values.WALLPAPER` |
+| Wallpaper | `~/.local/state/theme/active.json` | daemon paints with `awww` / `mpvpaper`; clients watch `values.WALLPAPER` |
 | Neovim base46 | cache | `nvim --headless` recompile |
 
 Writers for Ghostty, Hyprland, Kitty, Vicinae, swaync, Firefox, and Zathura are
@@ -391,14 +422,20 @@ apps after switching; your `qt6ct.conf` is never modified by theme-manager.
 
 ### Wallpaper
 
-The manager resolves `WALLPAPER` from the selected theme and atomically writes
-`~/.local/state/theme/active.json`. Quickshell watches this snapshot and draws
-still images as a fullscreen, noninteractive background layer per monitor.
-Missing, `none`, and video wallpaper values use Quickshell's solid background.
-No wallpaper daemon is started by theme-manager. Rebuild and replace installed
-`theme-daemon` binary after updating source; restart old daemon process once.
-Video themes still resolve for
-palette extraction, but video wallpaper playback is not implemented in Quickshell.
+`theme-daemon` resolves `WALLPAPER` from the selected theme and owns the
+backdrop processes:
+
+- still images are painted with `awww` (the daemon starts `awww-daemon` when
+  needed),
+- videos are played with `mpvpaper` (muted, looping, on every output),
+- `WALLPAPER=none`, a missing file, or clearing the theme stops both.
+
+Switching between a still and a video stops the previous helper first, so the
+two never fight over the background. The resolved state is atomically published
+to `~/.local/state/theme/active.json`; shell clients watch it for display, but
+they no longer start or stop wallpaper daemons themselves. Helper processes are
+best-effort: a missing `awww` or `mpvpaper` is logged and the rest of the theme
+still applies.
 
 ## Adding a new config target
 
