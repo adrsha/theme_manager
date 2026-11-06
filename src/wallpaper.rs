@@ -125,7 +125,7 @@ fn paint_still(path: &Path) {
         }
     }
 
-    match Command::new("awww").arg(["--transition-fps", "180", "--transition-type", "outer", "img"]).arg(path).status() {
+    match Command::new("awww").args(["--transition-fps", "180", "--transition-type", "outer", "img"]).arg(path).status() {
         Ok(status) if status.success() => {
             eprintln!("theme-manager: [wallpaper] set to '{}'", path.display())
         }
