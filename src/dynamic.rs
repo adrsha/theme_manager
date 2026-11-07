@@ -52,7 +52,18 @@ const LIGHT_ACCENT_LIGHTNESS: (f32, f32) = (0.30, 0.52);
 const FALLBACK_HUE: Hsl = Hsl(225.0, 0.45, 0.60);
 
 // --- Neutrals and text -----------------------------------------------------
+// Background surfaces are tinted at most this saturated on a muted wallpaper.
+// A vivid wallpaper (see `VIVID_WALLPAPER_CHROMA`) raises the limit toward
+// VIVID_BACKGROUND_SATURATION and moves the surfaces VIVID_BACKGROUND_LIFT away
+// from pure black (white in the light variant), because a very dark color
+// looks gray however saturated it is. The tint itself is never exceeded, so a
+// wallpaper with a faint tint keeps a faint background.
 const MAX_BACKGROUND_SATURATION: f32 = 0.22;
+const VIVID_BACKGROUND_SATURATION: f32 = 0.60;
+const VIVID_BACKGROUND_LIFT: f32 = 0.03;
+// Wallpaper vividness (mean OKLCH chroma, see `wallpaper_vividness`) at which
+// the backgrounds are as colorful as they get.
+const VIVID_WALLPAPER_CHROMA: f32 = 0.18;
 const MAX_FOREGROUND_SATURATION: f32 = 0.16;
 // Wallpaper brightness (0..=1) assumed when it can't be measured: no softening.
 const NEUTRAL_BRIGHTNESS: f32 = 0.5;
@@ -286,7 +297,7 @@ fn is_animated_media(path: &Path) -> bool {
 /// Build the full palette from the wallpaper's pixels.
 ///
 /// Everything comes from the wallpaper itself: backgrounds carry its overall
-/// tint, accents are its own hues at their own saturation and brightness (a
+/// tint (more colorful the more vivid the wallpaper is), accents are its own hues at their own saturation and brightness (a
 /// muted wallpaper gives muted accents, a vivid one vivid accents), and only
 /// contrast limits move a color away from what the wallpaper shows.
 fn generate_palette(pixels: &[Rgb], variant: &str) -> Result<HashMap<String, String>, ThemeError> {
@@ -297,8 +308,19 @@ fn generate_palette(pixels: &[Rgb], variant: &str) -> Result<HashMap<String, Str
     };
 
     let tint = wall_tint(pixels);
-    let background_at = |lightness| {
-        hsl_to_rgb(Hsl(tint.0, tint.1.min(MAX_BACKGROUND_SATURATION), lightness))
+    // 0 for a muted wallpaper, 1 for a neon one: how far the backgrounds move
+    // from near-black/white gray toward the wallpaper's own color.
+    let vividness = (wallpaper_vividness(pixels) / VIVID_WALLPAPER_CHROMA).clamp(0.0, 1.0);
+    let background_saturation = MAX_BACKGROUND_SATURATION
+        + (VIVID_BACKGROUND_SATURATION - MAX_BACKGROUND_SATURATION) * vividness;
+    let background_lift = VIVID_BACKGROUND_LIFT * vividness;
+    let background_at = |lightness: f32| {
+        let lightness = if dark {
+            lightness + background_lift
+        } else {
+            lightness - background_lift
+        };
+        hsl_to_rgb(Hsl(tint.0, tint.1.min(background_saturation), lightness))
     };
     let foreground_at = |lightness| {
         hsl_to_rgb(Hsl(tint.0, tint.1.min(MAX_FOREGROUND_SATURATION), lightness))
@@ -1417,7 +1439,21 @@ mod tests {
             let background = hsl_of(&palette, "BASE00");
             // 8-bit rounding of a very light, barely tinted color shifts its hue a little.
             assert!(hue_distance(background.0, 30.0) <= 15.0, "{variant}: {background:?}");
-            assert!(background.1 <= 0.23, "{variant}: {background:?}");
+            assert!(
+                background.1 <= VIVID_BACKGROUND_SATURATION + 0.03,
+                "{variant}: {background:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vivid_wallpaper_gives_a_more_colorful_background_than_a_muted_one() {
+        for variant in ["dark", "light"] {
+            let vivid = palette_for(&hsl_pixels(270.0, 0.9, 0.5, 200), variant);
+            let muted = palette_for(&hsl_pixels(270.0, 0.12, 0.5, 200), variant);
+            let (vivid, muted) = (hsl_of(&vivid, "BASE00"), hsl_of(&muted, "BASE00"));
+            assert!(vivid.1 > muted.1 + 0.1, "{variant}: vivid {vivid:?}, muted {muted:?}");
+            assert!(muted.1 <= MAX_BACKGROUND_SATURATION + 0.03, "{variant}: {muted:?}");
         }
     }
 
